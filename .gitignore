@@ -2,3 +2,5 @@
 config
 /*/**/__pycache__
 logs
+dags/rss_data
+dags/normalized_feeds
