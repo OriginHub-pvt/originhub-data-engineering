@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.providers.standard.operators.python import PythonOperator
 
-from dags.src import fetch_rss_feeds, store_rss_feeds
+from src import fetch_rss_feeds, store_rss_feeds
 
 default_args = {
     "owner": "Mayank",
