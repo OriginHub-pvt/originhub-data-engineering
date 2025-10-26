@@ -51,7 +51,7 @@ def _extract_config(context: Any) -> Tuple[List[str], str | None, int]:
     dag_run = context.get("dag_run")
     conf = dag_run.conf if dag_run else {}
 
-    urls = _normalize_urls(conf.get("rss_urls", params.get("rss_urls")))
+    urls = _normalize_urls(conf.get("rss_url", params.get("rss_url")))
     output_dir = conf.get("output_dir", params.get("output_dir"))
     timeout = int(conf.get("request_timeout", params.get("request_timeout", DEFAULT_TIMEOUT)))
     return urls, output_dir, timeout
@@ -60,7 +60,7 @@ def _extract_config(context: Any) -> Tuple[List[str], str | None, int]:
 def fetch_rss_feeds(**context: Any) -> Dict[str, Any]:
     urls, output_dir, timeout = _extract_config(context)
     if not urls:
-        raise ValueError("Pass at least one RSS URL via dag_run.conf or DAG params (rss_urls).")
+        raise ValueError("Pass at least one RSS URL via dag_run.conf or DAG params (rss_url).")
 
     fetched_payloads: List[Dict[str, Any]] = []
     for rss_url in urls:

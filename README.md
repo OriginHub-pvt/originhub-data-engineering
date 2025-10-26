@@ -32,7 +32,7 @@ Use the search box or the `rss` tag to find the `rss_feed_ingestion` DAG. Unpaus
 
 You can trigger from the UI (`Trigger DAG w/ config`) or the CLI. The DAG accepts the following optional parameters:
 
-- `rss_urls`: list of feed URLs (string, comma/newline separated list, or JSON array)
+- `rss_url`: list of feed URLs (string, comma/newline separated list, or JSON array)
 - `output_dir`: target directory relative to `/opt/airflow/dags` (defaults to `rss_data`)
 - `request_timeout`: HTTP timeout in seconds (default `30`)
 
