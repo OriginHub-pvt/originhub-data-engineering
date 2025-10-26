@@ -58,33 +58,24 @@ def _extract_config(context: Any) -> Tuple[List[str], str | None, int]:
 
 
 def fetch_rss_feeds(**context: Any) -> Dict[str, Any]:
-    logging.debug("Starting 'fetch_rss_feeds' with context: %s", context)
     urls, output_dir, timeout = _extract_config(context)
     if not urls:
-        logging.error("No RSS URL provided.")
         raise ValueError("Pass at least one RSS URL via dag_run.conf or DAG params (rss_url).")
 
     fetched_payloads: List[Dict[str, Any]] = []
     for rss_url in urls:
-        try:
-            logging.debug("Fetching RSS feed from URL: %s", rss_url)
-            response = requests.get(rss_url, timeout=timeout)
-            response.raise_for_status()
+        response = requests.get(rss_url, timeout=timeout)
+        response.raise_for_status()
 
-            fetched_at = datetime.utcnow().replace(microsecond=0)
-            payload = {
-                "rss_url": rss_url,
-                "content": response.text,
-                "fetched_at": fetched_at.isoformat(),
-            }
-            
-            logging.info("Fetched %s (%d bytes)", rss_url, len(response.text))
-            fetched_payloads.append(payload)
-        except requests.exceptions.RequestException as e:
-            logging.error("Failed to fetch RSS feed from %s: %s", rss_url, e)
-            continue
+        fetched_at = datetime.utcnow().replace(microsecond=0)
+        payload = {
+            "rss_url": rss_url,
+            "content": response.text,
+            "fetched_at": fetched_at.isoformat(),
+        }
+        logging.info("Fetched %s (%d bytes)", rss_url, len(response.text))
+        fetched_payloads.append(payload)
 
-    logging.debug("Fetch complete. Payloads: %s", fetched_payloads)
     return {
         "feeds": fetched_payloads,
         "output_dir": output_dir,
@@ -92,15 +83,12 @@ def fetch_rss_feeds(**context: Any) -> Dict[str, Any]:
 
 
 def store_rss_feeds(payload: Dict[str, Any]) -> List[str]:
-    logging.debug("Starting 'store_rss_feeds' with payload: %s", payload)
     feeds = payload.get("feeds") or []
     if not feeds:
-        logging.error("No feed payloads supplied to store.")
         raise ValueError("No feed payloads supplied to store.")
 
     output_dir = payload.get("output_dir")
     base_dir = _resolve_output_dir(output_dir)
-    logging.debug("Resolved output directory: %s", base_dir)
 
     saved_paths: List[str] = []
     for feed in feeds:
@@ -110,15 +98,9 @@ def store_rss_feeds(payload: Dict[str, Any]) -> List[str]:
 
         filename = _build_filename(rss_url, fetched_at)
         destination = base_dir / filename
-        logging.debug("Saving RSS feed to %s", destination)
+        destination.write_text(feed["content"], encoding="utf-8")
 
-        try:
-            destination.write_text(feed["content"], encoding="utf-8")
-            logging.info("Saved RSS feed from %s to %s", rss_url, destination)
-            saved_paths.append(str(destination))
-        except IOError as e:
-            logging.error("Failed to save RSS feed from %s to %s: %s", rss_url, destination, e)
-            continue
+        logging.info("Saved RSS feed from %s to %s", rss_url, destination)
+        saved_paths.append(str(destination))
 
-    logging.debug("Store complete. Saved paths: %s", saved_paths)
     return saved_paths
