@@ -77,11 +77,12 @@ def fetch_rss_feeds(**context: Any) -> Dict[str, Any]:
                 "content": response.text,
                 "fetched_at": fetched_at.isoformat(),
             }
-
+            
             logging.info("Fetched %s (%d bytes)", rss_url, len(response.text))
             fetched_payloads.append(payload)
         except requests.exceptions.RequestException as e:
             logging.error("Failed to fetch RSS feed from %s: %s", rss_url, e)
+            raise Exception(e)
 
     logging.debug("Fetch complete. Payloads: %s", fetched_payloads)
     return {
