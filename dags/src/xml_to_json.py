@@ -172,6 +172,20 @@ def dedupe_by_url(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return deduped
 
 
+def normalize_latest_feeds(**context) -> List[str]:
+    """
+    Airflow task wrapper to normalize feeds.
+    This processes all XML files in the rss_data directory.
+    """
+    # Resolve paths relative to the dags directory
+    dags_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    input_dir = os.path.join(dags_dir, "rss_data")
+    output_dir = os.path.join(dags_dir, "normalized_feeds")
+    
+    logging.info(f"Normalizing feeds from {input_dir} to {output_dir}")
+    return normalize_all_feeds(input_dir, output_dir)
+
+
 if __name__ == "__main__":
     # Initialize logging
     setup_logging()
