@@ -8,7 +8,7 @@ from airflow.providers.standard.operators.python import PythonOperator
 from src import fetch_rss_feeds, store_rss_feeds, normalize_latest_feeds
 
 default_args = {
-    "owner": "Mayank",
+    "owner": "OriginHub",
     "depends_on_past": False,
     "retries": 0,
     "retry_delay": timedelta(minutes=5),
