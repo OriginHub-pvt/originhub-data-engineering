@@ -1,133 +1,470 @@
 import pytest
 import os
 import json
-from datetime import datetime
-from dags.src.xml_to_json import _to_iso_from_struct, _strip_html, normalize_entry, parse_xml_file, dedupe_by_url, normalize_all_feeds
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+from unittest.mock import Mock, patch, MagicMock
+from dags.src.xml_to_json import (
+    _to_iso_from_struct, 
+    _strip_html, 
+    _first_url_from_links,
+    _best_url,
+    _best_created,
+    _best_updated,
+    _coalesce_description,
+    normalize_entry, 
+    parse_xml_file, 
+    dedupe_by_url, 
+    normalize_all_feeds,
+    normalize_latest_feeds,
+    setup_logging
+)
 import logging
+import feedparser
 
-# Sample data for testing
-sample_entry = {
-    'title': 'Sample Entry',
-    'link': 'http://example.com',
-    'summary': '<p>This is a <b>sample</b> summary.</p>',
-    'published_parsed': datetime(2025, 10, 26, 0, 0).timetuple(),
-    'created_parsed': None,
-    'updated_parsed': None,
-}
 
-# ---------- Utility Function Tests ----------
+# ---------- Test setup_logging ----------
 
-def test_to_iso_from_struct():
+def test_setup_logging():
+    """Test that setup_logging configures logging correctly"""
+    setup_logging()
+    logger = logging.getLogger()
+    assert logger.level == logging.DEBUG
+
+
+# ---------- Test _to_iso_from_struct ----------
+
+def test_to_iso_from_struct_with_valid_time():
+    """Test converting valid time struct to ISO format"""
+    time_struct = datetime(2025, 10, 26, 12, 0, 0).timetuple()
+    result = _to_iso_from_struct(time_struct)
+    assert result == "2025-10-26T12:00:00Z"
+
+
+def test_to_iso_from_struct_with_none():
+    """Test that None returns None"""
     assert _to_iso_from_struct(None) is None
-    assert _to_iso_from_struct(datetime(2025, 10, 26, 12, 0, 0).timetuple()) == "2025-10-26T12:00:00Z"
 
-def test_strip_html():
+
+def test_to_iso_from_struct_with_zero():
+    """Test that zero/false values return None"""
+    assert _to_iso_from_struct(0) is None
+    assert _to_iso_from_struct(False) is None
+
+
+def test_to_iso_from_struct_with_different_times():
+    """Test various time values"""
+    # Midnight
+    result = _to_iso_from_struct(datetime(2025, 1, 1, 0, 0, 0).timetuple())
+    assert result == "2025-01-01T00:00:00Z"
+    
+    # End of day
+    result = _to_iso_from_struct(datetime(2025, 12, 31, 23, 59, 59).timetuple())
+    assert result == "2025-12-31T23:59:59Z"
+
+
+def test_to_iso_from_struct_with_malformed_structure():
+    """Test that malformed time structure returns None"""
+    assert _to_iso_from_struct(object()) is None
+    assert _to_iso_from_struct("invalid") is None
+    assert _to_iso_from_struct({}) is None
+
+
+def test_to_iso_from_struct_timezone_handling():
+    """Test that timezone is always UTC"""
+    time_struct = datetime(2025, 6, 15, 14, 30, 45).timetuple()
+    result = _to_iso_from_struct(time_struct)
+    assert result.endswith("Z")
+    assert "+" not in result
+
+
+# ---------- Test _strip_html ----------
+
+def test_strip_html_with_simple_tags():
+    """Test stripping simple HTML tags"""
     assert _strip_html('<p>Test</p>') == 'Test'
+    assert _strip_html('<div>Content</div>') == 'Content'
+    assert _strip_html('<span>Text</span>') == 'Text'
+
+
+def test_strip_html_with_none():
+    """Test that None returns empty string"""
     assert _strip_html(None) == ''
 
-# Additional Test for _to_iso_from_struct with malformed structure
-def test_to_iso_from_struct_malformed():
-    assert _to_iso_from_struct(object()) is None
 
-# Additional edge case tests for _strip_html
-def test_strip_html_complex():
-    assert _strip_html('<p><b>Bold</b> and <a href="#">link</a></p>') == 'Bold and link'
+def test_strip_html_with_empty_string():
+    """Test that empty string returns empty string"""
+    assert _strip_html('') == ''
+    assert _strip_html('   ') == ''
 
-# ---------- Main Function Tests ----------
 
-def test_normalize_entry():
-    result = normalize_entry(sample_entry)
-    assert result['title'] == 'Sample Entry'
-    assert result['url'] == 'http://example.com'
-    assert result['description'] == 'This is a sample summary.'
-    assert result['updatedDate'] == '2025-10-26T00:00:00Z'
-    assert result['createdDate'] == '2025-10-26T00:00:00Z'
+def test_strip_html_with_complex_html():
+    """Test stripping complex HTML with multiple tags"""
+    html = '<p><b>Bold</b> and <a href="#">link</a></p>'
+    result = _strip_html(html)
+    assert result == 'Bold and link'
 
-def test_parse_xml_file(tmp_path):
-    xml_content = '<?xml version="1.0"?><rss><channel><item><title>Example</title></item></channel></rss>'
-    xml_file = tmp_path / "test.xml"
-    xml_file.write_text(xml_content)
-    parsed = parse_xml_file(str(xml_file))
-    assert len(parsed) == 1
-    assert parsed[0]['title'] == 'Example'
 
-def test_dedupe_by_url():
-    items = [
-        {'url': 'http://example.com', 'title': 'Example One', 'createdDate': '2025-10-26'},
-        {'url': 'http://example.com', 'title': 'Example Two', 'createdDate': '2025-10-26'},
+def test_strip_html_with_nested_tags():
+    """Test stripping deeply nested HTML"""
+    html = '<div><p><span><strong>Nested</strong></span></p></div>'
+    result = _strip_html(html)
+    assert result == 'Nested'
+
+
+def test_strip_html_with_attributes():
+    """Test stripping HTML with various attributes"""
+    html = '<a href="http://example.com" class="link" id="test">Link Text</a>'
+    result = _strip_html(html)
+    assert result == 'Link Text'
+    assert 'href' not in result
+    assert 'class' not in result
+
+
+def test_strip_html_with_special_characters():
+    """Test that special characters are preserved"""
+    html = '<p>Special: &amp; &lt; &gt; &quot;</p>'
+    result = _strip_html(html)
+    assert '&' in result
+    assert '<' in result or result == 'Special: & < > "'
+
+
+def test_strip_html_with_whitespace():
+    """Test that whitespace is handled correctly"""
+    html = '<p>  Multiple   spaces  </p>'
+    result = _strip_html(html)
+    assert result == 'Multiple spaces'
+
+
+def test_strip_html_with_line_breaks():
+    """Test handling of line breaks"""
+    html = '<p>Line 1<br>Line 2<br/>Line 3</p>'
+    result = _strip_html(html)
+    assert 'Line 1' in result
+    assert 'Line 2' in result
+    assert 'Line 3' in result
+
+
+def test_strip_html_with_scripts_and_styles():
+    """Test that script and style content is removed"""
+    html = '<div><script>alert("test");</script><p>Content</p><style>.class{}</style></div>'
+    result = _strip_html(html)
+    assert 'alert' not in result
+    assert '.class' not in result
+    assert 'Content' in result
+
+
+def test_strip_html_with_unicode():
+    """Test handling of unicode characters"""
+    html = '<p>Unicode: 中文 العربية 🎉</p>'
+    result = _strip_html(html)
+    assert '中文' in result
+    assert 'العربية' in result
+    assert '🎉' in result
+
+
+# ---------- Test _first_url_from_links ----------
+
+def test_first_url_from_links_with_none():
+    """Test that None returns None"""
+    assert _first_url_from_links(None) is None
+
+
+def test_first_url_from_links_with_empty_list():
+    """Test that empty list returns None"""
+    assert _first_url_from_links([]) is None
+
+
+def test_first_url_from_links_with_alternate_rel():
+    """Test extracting URL with alternate rel"""
+    links = [{'rel': 'alternate', 'href': 'http://example.com/alternate'}]
+    result = _first_url_from_links(links)
+    assert result == 'http://example.com/alternate'
+
+
+def test_first_url_from_links_with_multiple_links():
+    """Test that alternate rel is preferred"""
+    links = [
+        {'rel': 'self', 'href': 'http://example.com/self'},
+        {'rel': 'alternate', 'href': 'http://example.com/alternate'},
+        {'rel': 'canonical', 'href': 'http://example.com/canonical'}
     ]
-    deduped = dedupe_by_url(items)
-    assert len(deduped) == 1
+    result = _first_url_from_links(links)
+    assert result == 'http://example.com/alternate'
 
-# Test parse_xml_file with malformed XML content
-def test_parse_xml_file_malformed(tmp_path, caplog):
-    malformed_content = '<?xml version="1.0"?><rss><channel><item><title>Missing closing tags'
-    xml_file = tmp_path / "malformed.xml"
-    xml_file.write_text(malformed_content)
-    
-    with caplog.at_level(logging.ERROR):
-        result = parse_xml_file(str(xml_file))
-        assert isinstance(result, list)
 
-# Comprehensive test from parsing to deduplication
-def test_full_workflow(tmp_path):
-    complete_content = '<?xml version="1.0"?><rss><channel><item><title>Complete Test</title><link>http://example.com/test</link><description>Full processing test</description></item></channel></rss>'
-    xml_file = tmp_path / "complete.xml"
-    xml_file.write_text(complete_content)
-    
-    parsed = parse_xml_file(str(xml_file))
-    deduped = dedupe_by_url(parsed)
-    assert len(deduped) == 1
-    assert deduped[0]['title'] == 'Complete Test'
+def test_first_url_from_links_without_alternate():
+    """Test fallback to first link with href"""
+    links = [
+        {'rel': 'self', 'href': 'http://example.com/first'},
+        {'rel': 'canonical', 'href': 'http://example.com/second'}
+    ]
+    result = _first_url_from_links(links)
+    assert result == 'http://example.com/first'
 
-# Test additional edge cases
-def test_normalize_entry_with_missing_fields():
-    """Test normalize_entry with minimal data"""
-    minimal_entry = {'title': 'Minimal'}
-    result = normalize_entry(minimal_entry)
-    assert result['title'] == 'Minimal'
-    assert result['url'] == ''
-    assert result['description'] == ''
-    assert result['updatedDate'] == ''
-    assert result['createdDate'] == ''
 
-def test_normalize_entry_with_alternative_url_sources():
-    """Test that _best_url checks alternative URL sources"""
-    entry_with_links = {
-        'title': 'Test',
+def test_first_url_from_links_with_missing_href():
+    """Test handling links without href"""
+    links = [
+        {'rel': 'alternate'},
+        {'rel': 'self', 'href': 'http://example.com/found'}
+    ]
+    result = _first_url_from_links(links)
+    assert result == 'http://example.com/found'
+
+
+def test_first_url_from_links_with_whitespace():
+    """Test that URLs are stripped of whitespace"""
+    links = [{'rel': 'alternate', 'href': '  http://example.com/test  '}]
+    result = _first_url_from_links(links)
+    assert result == 'http://example.com/test'
+
+
+def test_first_url_from_links_with_empty_href():
+    """Test handling empty href values"""
+    links = [
+        {'rel': 'alternate', 'href': ''},
+        {'rel': 'self', 'href': 'http://example.com/valid'}
+    ]
+    result = _first_url_from_links(links)
+    # Should skip empty href and find valid one
+    assert result is not None
+
+
+# ---------- Test _best_url ----------
+
+def test_best_url_with_link_field():
+    """Test that link field is preferred"""
+    entry = {'link': 'http://example.com/link'}
+    result = _best_url(entry)
+    assert result == 'http://example.com/link'
+
+
+def test_best_url_with_links_array():
+    """Test fallback to links array"""
+    entry = {
         'links': [{'rel': 'alternate', 'href': 'http://example.com/alternate'}]
     }
-    result = normalize_entry(entry_with_links)
-    assert result['url'] == 'http://example.com/alternate'
+    result = _best_url(entry)
+    assert result == 'http://example.com/alternate'
 
-def test_dedupe_by_url_with_no_url():
-    """Test deduplication when items have no URL"""
-    items = [
-        {'title': 'Test 1', 'createdDate': '2025-10-26'},
-        {'title': 'Test 2', 'createdDate': '2025-10-26'},  # Different title
-        {'title': 'test 1', 'createdDate': '2025-10-26'},  # Same as first (case insensitive)
-    ]
-    deduped = dedupe_by_url(items)
-    # First two should be unique, third should be deduplicated
-    assert len(deduped) == 2
 
-def test_coalesce_description_from_content():
-    """Test that description is extracted from content array"""
-    entry_with_content = {
-        'title': 'Test',
-        'content': [{'value': '<p>Content from array</p>'}]
-    }
-    result = normalize_entry(entry_with_content)
-    assert result['description'] == 'Content from array'
+def test_best_url_with_id_field():
+    """Test fallback to id field when it's a URL"""
+    entry = {'id': 'https://example.com/id'}
+    result = _best_url(entry)
+    assert result == 'https://example.com/id'
 
-def test_best_url_with_guid():
-    """Test URL extraction from guid field"""
-    entry_with_guid = {
-        'title': 'Test',
+
+def test_best_url_with_non_url_id():
+    """Test that non-URL id is ignored"""
+    entry = {'id': 'some-identifier-123'}
+    result = _best_url(entry)
+    assert result is None
+
+
+def test_best_url_with_guid_field():
+    """Test fallback to guid field when it's a URL"""
+    entry = {'guid': 'https://example.com/guid'}
+    result = _best_url(entry)
+    assert result == 'https://example.com/guid'
+
+
+def test_best_url_with_non_url_guid():
+    """Test that non-URL guid is ignored"""
+    entry = {'guid': 'guid-12345'}
+    result = _best_url(entry)
+    assert result is None
+
+
+def test_best_url_priority_order():
+    """Test that link field takes priority over other sources"""
+    entry = {
+        'link': 'http://example.com/link',
+        'links': [{'rel': 'alternate', 'href': 'http://example.com/alternate'}],
+        'id': 'https://example.com/id',
         'guid': 'https://example.com/guid'
     }
-    result = normalize_entry(entry_with_guid)
-    assert result['url'] == 'https://example.com/guid'
+    result = _best_url(entry)
+    assert result == 'http://example.com/link'
+
+
+def test_best_url_with_empty_link():
+    """Test that empty link field is skipped"""
+    entry = {
+        'link': '   ',
+        'guid': 'https://example.com/guid'
+    }
+    result = _best_url(entry)
+    assert result == 'https://example.com/guid'
+
+
+def test_best_url_with_no_valid_url():
+    """Test that None is returned when no valid URL found"""
+    entry = {
+        'title': 'No URL',
+        'id': 'non-url-id',
+        'guid': 'non-url-guid'
+    }
+    result = _best_url(entry)
+    assert result is None
+
+
+def test_best_url_strips_whitespace():
+    """Test that URLs are stripped of whitespace"""
+    entry = {'link': '  http://example.com/test  '}
+    result = _best_url(entry)
+    assert result == 'http://example.com/test'
+
+
+# ---------- Test _best_created ----------
+
+def test_best_created_with_published_parsed():
+    """Test that published_parsed is preferred"""
+    entry = {
+        'published_parsed': datetime(2025, 10, 26, 12, 0, 0).timetuple()
+    }
+    result = _best_created(entry)
+    assert result == "2025-10-26T12:00:00Z"
+
+
+def test_best_created_with_created_parsed():
+    """Test fallback to created_parsed"""
+    entry = {
+        'created_parsed': datetime(2025, 10, 25, 10, 0, 0).timetuple()
+    }
+    result = _best_created(entry)
+    assert result == "2025-10-25T10:00:00Z"
+
+
+def test_best_created_with_updated_parsed():
+    """Test fallback to updated_parsed"""
+    entry = {
+        'updated_parsed': datetime(2025, 10, 24, 8, 0, 0).timetuple()
+    }
+    result = _best_created(entry)
+    assert result == "2025-10-24T08:00:00Z"
+
+
+def test_best_created_priority_order():
+    """Test that published_parsed takes priority"""
+    entry = {
+        'published_parsed': datetime(2025, 10, 26, 12, 0, 0).timetuple(),
+        'created_parsed': datetime(2025, 10, 25, 10, 0, 0).timetuple(),
+        'updated_parsed': datetime(2025, 10, 24, 8, 0, 0).timetuple()
+    }
+    result = _best_created(entry)
+    assert result == "2025-10-26T12:00:00Z"
+
+
+def test_best_created_with_no_dates():
+    """Test that None is returned when no dates available"""
+    entry = {'title': 'No dates'}
+    result = _best_created(entry)
+    assert result is None
+
+
+# ---------- Test _best_updated ----------
+
+def test_best_updated_with_updated_parsed():
+    """Test that updated_parsed is preferred"""
+    entry = {
+        'updated_parsed': datetime(2025, 10, 27, 14, 0, 0).timetuple()
+    }
+    created_iso = "2025-10-26T12:00:00Z"
+    result = _best_updated(entry, created_iso)
+    assert result == "2025-10-27T14:00:00Z"
+
+
+def test_best_updated_fallback_to_created():
+    """Test fallback to created_iso when updated_parsed not available"""
+    entry = {}
+    created_iso = "2025-10-26T12:00:00Z"
+    result = _best_updated(entry, created_iso)
+    assert result == "2025-10-26T12:00:00Z"
+
+
+def test_best_updated_with_none_created():
+    """Test with None created_iso"""
+    entry = {}
+    result = _best_updated(entry, None)
+    assert result is None
+
+
+# ---------- Test _coalesce_description ----------
+
+def test_coalesce_description_with_summary():
+    """Test that summary is preferred"""
+    entry = {'summary': '<p>Summary text</p>'}
+    result = _coalesce_description(entry)
+    assert result == 'Summary text'
+
+
+def test_coalesce_description_with_description():
+    """Test fallback to description field"""
+    entry = {'description': '<p>Description text</p>'}
+    result = _coalesce_description(entry)
+    assert result == 'Description text'
+
+
+def test_coalesce_description_with_content_array():
+    """Test fallback to content array"""
+    entry = {
+        'content': [{'value': '<p>Content from array</p>'}]
+    }
+    result = _coalesce_description(entry)
+    assert result == 'Content from array'
+
+
+def test_coalesce_description_with_content_encoded():
+    """Test fallback to content:encoded field"""
+    entry = {'content:encoded': '<p>Encoded content</p>'}
+    result = _coalesce_description(entry)
+    assert result == 'Encoded content'
+
+
+def test_coalesce_description_priority_order():
+    """Test that summary takes priority"""
+    entry = {
+        'summary': '<p>Summary</p>',
+        'description': '<p>Description</p>',
+        'content': [{'value': '<p>Content</p>'}],
+        'content:encoded': '<p>Encoded</p>'
+    }
+    result = _coalesce_description(entry)
+    assert result == 'Summary'
+
+
+def test_coalesce_description_with_empty_values():
+    """Test handling of empty values"""
+    entry = {
+        'summary': '',
+        'description': '<p>Valid description</p>'
+    }
+    result = _coalesce_description(entry)
+    # Should return empty since summary exists but is empty
+    assert result == ''
+
+
+def test_coalesce_description_with_no_content():
+    """Test that empty string is returned when no content found"""
+    entry = {'title': 'No content'}
+    result = _coalesce_description(entry)
+    assert result == ''
+
+
+def test_coalesce_description_with_multiple_content_items():
+    """Test that first content item with value is used"""
+    entry = {
+        'content': [
+            {'type': 'text/plain'},
+            {'value': '<p>First with value</p>'},
+            {'value': '<p>Second with value</p>'}
+        ]
+    }
+    result = _coalesce_description(entry)
+    assert result == 'First with value'
 
 # ---------- normalize_all_feeds Tests ----------
 

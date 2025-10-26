@@ -21,7 +21,7 @@ import logging
 
 # Setup logging
 def setup_logging():
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.DEBUG, force=True)
 
 
 # ---------- utility functions ----------
@@ -39,7 +39,10 @@ def _to_iso_from_struct(t) -> Optional[str]:
 def _strip_html(s: Optional[str]) -> str:
     if not s:
         return ""
-    return BeautifulSoup(s, "html.parser").get_text(separator=" ", strip=True)
+    text = BeautifulSoup(s, "html.parser").get_text(separator=" ", strip=True)
+    # Collapse multiple spaces into single spaces
+    import re
+    return re.sub(r'\s+', ' ', text)
 
 
 def _first_url_from_links(links: Any) -> Optional[str]:
@@ -81,20 +84,25 @@ def _best_updated(entry: Dict[str, Any], created_iso: Optional[str]) -> Optional
 
 
 def _coalesce_description(entry: Dict[str, Any]) -> str:
-    tx = entry.get("summary") or entry.get("description")
-    if not tx:
-        content = entry.get("content") or []
-        if content and isinstance(content, list):
-            for item in content:
-                if item.get("value"):
-                    tx = item["value"]
-                    break
-
-    # Check alternative content tags
-    if not tx:
-        tx = entry.get("content:encoded", "")
+    # Check if summary exists (even if empty) - priority field
+    if "summary" in entry:
+        return _strip_html(entry["summary"] or "")
     
-    return _strip_html(tx or "")
+    # Fall back to description
+    tx = entry.get("description")
+    if tx:
+        return _strip_html(tx)
+    
+    # Fall back to content array
+    content = entry.get("content") or []
+    if content and isinstance(content, list):
+        for item in content:
+            if item.get("value"):
+                return _strip_html(item["value"])
+    
+    # Check alternative content tags
+    tx = entry.get("content:encoded", "")
+    return _strip_html(tx)
 
 
 def normalize_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
