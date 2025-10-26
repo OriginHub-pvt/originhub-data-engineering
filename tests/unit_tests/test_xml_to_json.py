@@ -1,6 +1,8 @@
 import pytest
+import os
+import json
 from datetime import datetime
-from dags.src.xml_to_json import _to_iso_from_struct, _strip_html, normalize_entry, parse_xml_file, dedupe_by_url
+from dags.src.xml_to_json import _to_iso_from_struct, _strip_html, normalize_entry, parse_xml_file, dedupe_by_url, normalize_all_feeds
 import logging
 
 # Sample data for testing
@@ -126,3 +128,143 @@ def test_best_url_with_guid():
     }
     result = normalize_entry(entry_with_guid)
     assert result['url'] == 'https://example.com/guid'
+
+# ---------- normalize_all_feeds Tests ----------
+
+def test_normalize_all_feeds_creates_output_directory(tmp_path):
+    """Test that normalize_all_feeds creates the output directory if it doesn't exist"""
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    
+    # Create a simple XML file
+    xml_content = '<?xml version="1.0"?><rss><channel><item><title>Test</title><link>http://example.com</link></item></channel></rss>'
+    (input_dir / "test.xml").write_text(xml_content)
+    
+    # Ensure output directory doesn't exist
+    assert not output_dir.exists()
+    
+    # Call normalize_all_feeds
+    normalize_all_feeds(str(input_dir), str(output_dir))
+    
+    # Verify output directory was created
+    assert output_dir.exists()
+    assert output_dir.is_dir()
+
+def test_normalize_all_feeds_processes_multiple_xml_files(tmp_path):
+    """Test that normalize_all_feeds processes multiple XML files and creates separate normalized JSON files for each"""
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    
+    # Create multiple XML files
+    xml_content_1 = '<?xml version="1.0"?><rss><channel><item><title>Test 1</title><link>http://example.com/1</link></item></channel></rss>'
+    xml_content_2 = '<?xml version="1.0"?><rss><channel><item><title>Test 2</title><link>http://example.com/2</link></item></channel></rss>'
+    xml_content_3 = '<?xml version="1.0"?><rss><channel><item><title>Test 3</title><link>http://example.com/3</link></item></channel></rss>'
+    
+    (input_dir / "feed1.xml").write_text(xml_content_1)
+    (input_dir / "feed2.xml").write_text(xml_content_2)
+    (input_dir / "feed3.xml").write_text(xml_content_3)
+    
+    # Call normalize_all_feeds
+    output_files = normalize_all_feeds(str(input_dir), str(output_dir))
+    
+    # Verify 3 JSON files were created
+    assert len(output_files) == 3
+    assert (output_dir / "feed1.normalized.json").exists()
+    assert (output_dir / "feed2.normalized.json").exists()
+    assert (output_dir / "feed3.normalized.json").exists()
+
+def test_normalize_all_feeds_saves_correct_data(tmp_path):
+    """Test that normalize_all_feeds saves correct normalized data to each JSON file"""
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    
+    # Create XML file with specific data
+    xml_content = '''<?xml version="1.0"?>
+    <rss version="2.0">
+        <channel>
+            <item>
+                <title>Sample Article</title>
+                <link>http://example.com/article</link>
+                <description><![CDATA[<p>This is a <b>test</b> description.</p>]]></description>
+                <pubDate>Mon, 26 Oct 2025 12:00:00 GMT</pubDate>
+            </item>
+            <item>
+                <title>Another Article</title>
+                <link>http://example.com/another</link>
+                <description>Plain text description</description>
+            </item>
+        </channel>
+    </rss>'''
+    
+    (input_dir / "test_feed.xml").write_text(xml_content)
+    
+    # Call normalize_all_feeds
+    output_files = normalize_all_feeds(str(input_dir), str(output_dir))
+    
+    # Read the generated JSON file
+    assert len(output_files) == 1
+    with open(output_files[0], 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    
+    # Verify the data structure and content
+    assert len(data) == 2
+    assert data[0]['title'] == 'Sample Article'
+    assert data[0]['url'] == 'http://example.com/article'
+    assert 'test description' in data[0]['description']
+    assert data[1]['title'] == 'Another Article'
+    assert data[1]['url'] == 'http://example.com/another'
+    
+    # Verify all required fields are present
+    for item in data:
+        assert 'title' in item
+        assert 'url' in item
+        assert 'description' in item
+        assert 'updatedDate' in item
+        assert 'createdDate' in item
+
+def test_normalize_all_feeds_handles_empty_directory(tmp_path, capsys):
+    """Test that normalize_all_feeds handles an empty input directory gracefully"""
+    input_dir = tmp_path / "empty_input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    
+    # Call normalize_all_feeds with empty directory
+    output_files = normalize_all_feeds(str(input_dir), str(output_dir))
+    
+    # Verify it returns an empty list
+    assert output_files == []
+    
+    # Verify warning message was printed
+    captured = capsys.readouterr()
+    assert "No XML files found" in captured.out
+
+def test_normalize_all_feeds_returns_correct_paths(tmp_path):
+    """Test that normalize_all_feeds returns the correct list of paths to the generated JSON files"""
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    
+    # Create XML files
+    xml_content = '<?xml version="1.0"?><rss><channel><item><title>Test</title><link>http://example.com</link></item></channel></rss>'
+    (input_dir / "alpha.xml").write_text(xml_content)
+    (input_dir / "beta.xml").write_text(xml_content)
+    
+    # Call normalize_all_feeds
+    output_files = normalize_all_feeds(str(input_dir), str(output_dir))
+    
+    # Verify returned paths
+    assert len(output_files) == 2
+    assert all(os.path.exists(path) for path in output_files)
+    assert any("alpha.normalized.json" in path for path in output_files)
+    assert any("beta.normalized.json" in path for path in output_files)
+    
+    # Verify paths are absolute
+    for path in output_files:
+        assert os.path.isabs(path) or path.startswith(str(output_dir))
+        assert path.endswith(".normalized.json")
