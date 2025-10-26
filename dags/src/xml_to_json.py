@@ -120,24 +120,44 @@ def parse_xml_file(file_path: str) -> List[Dict[str, Any]]:
 
 
 # ---------- directory loop ----------
-def normalize_all_feeds(input_dir: str = "./dags/rss_data") -> List[Dict[str, Any]]:
-    items: List[Dict[str, Any]] = []
+def normalize_all_feeds(input_dir: str = "./dags/rss_data", output_dir: str = "./dags/normalized_feeds") -> List[str]:
+    """
+    Normalize all XML feeds and save individual JSON files.
+    Returns list of output file paths.
+    """
     xml_files = sorted(glob.glob(os.path.join(input_dir, "*.xml")))
+    output_files = []
 
     if not xml_files:
         print(f"[warn] No XML files found in {input_dir}")
         return []
 
-    for path in xml_files:
-        try:
-            parsed = parse_xml_file(path)
-            items.extend(parsed)
-        except feedparser.FeedParserError as fp_ex:
-            logging.error(f"[error] FeedParserError parsing {path}: {fp_ex}")
-        except Exception as ex:
-            logging.error(f"[error] Exception parsing {path}: {ex}")
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
 
-    return items
+    for xml_path in xml_files:
+        try:
+            parsed = parse_xml_file(xml_path)
+            deduped = dedupe_by_url(parsed)
+            
+            # Get the base name of the XML file
+            xml_basename = os.path.basename(xml_path)
+            json_filename = os.path.splitext(xml_basename)[0] + ".normalized.json"
+            json_path = os.path.join(output_dir, json_filename)
+            
+            # Write the normalized data to JSON file
+            with open(json_path, "w", encoding="utf-8") as w:
+                json.dump(deduped, w, ensure_ascii=False, indent=2)
+            
+            output_files.append(json_path)
+            print(f"[info] Normalized {len(deduped)} items written to {json_path}")
+            
+        except feedparser.FeedParserError as fp_ex:
+            logging.error(f"[error] FeedParserError parsing {xml_path}: {fp_ex}")
+        except Exception as ex:
+            logging.error(f"[error] Exception parsing {xml_path}: {ex}")
+
+    return output_files
 
 
 def dedupe_by_url(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -153,15 +173,9 @@ def dedupe_by_url(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 if __name__ == "__main__":
-    output_path = "./dags/normalized_feeds.json"
-
     # Initialize logging
     setup_logging()
 
-    feeds = normalize_all_feeds()
-    feeds = dedupe_by_url(feeds)
-
-    with open(output_path, "w", encoding="utf-8") as w:
-        json.dump(feeds, w, ensure_ascii=False, indent=2)
-
-    print(f"[info] Normalized {len(feeds)} items written to {output_path}")
+    output_files = normalize_all_feeds()
+    
+    print(f"[info] Processed {len(output_files)} XML files and created {len(output_files)} normalized JSON files")
