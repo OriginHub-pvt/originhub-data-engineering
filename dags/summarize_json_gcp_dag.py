@@ -30,7 +30,7 @@ with DAG(
         hook = GCSHook(gcp_conn_id="gcp_default")
         content = hook.download(bucket_name=bucket, object_name=blob)
         data = json.loads(content.decode("utf-8"))
-        print(f"✅ Downloaded {len(data)} records from gs://{bucket}/{blob}")
+        print(f" Downloaded {len(data)} records from gs://{bucket}/{blob}")
         return data
 
     @task()
@@ -53,7 +53,7 @@ with DAG(
             data=file_bytes.getvalue(),
             mime_type="application/json"
         )
-        print(f"✅ Uploaded summarized JSON to gs://{bucket}/{blob}")
+        print(f" Uploaded summarized JSON to gs://{bucket}/{blob}")
 
     # DAG Flow
     json_list = download_json_from_gcs()
