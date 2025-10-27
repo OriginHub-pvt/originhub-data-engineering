@@ -23,7 +23,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 import re
 
-JSON_BUCKET_NAME = "json-train-storage"
+JSON_BUCKET_NAME = os.environ.get("JSON_BUCKET_NAME")
 
 # Setup logging
 def setup_logging():
