@@ -363,6 +363,27 @@ def scrape_all_from_json_files(json_dir: str = "dags/filtered_data") -> List[Dic
             continue
     
     logging.info(f"Completed scraping. Total results: {len(all_results)}")
+    
+    # Save results to scraped_data directory
+    if all_results:
+        # Create scraped_data directory if it doesn't exist
+        output_dir = "dags/scraped_data"
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Save title and scraped_content from each result
+        output_file = os.path.join(output_dir, "scraped_data.json")
+        scraped_data = [
+            {
+                "title": result.get("title", ""),
+                "scraped_content": result.get("scraped_content", "")
+            }
+            for result in all_results
+        ]
+        
+        with open(output_file, "w", encoding="utf-8") as f:
+            json.dump(scraped_data, f, indent=2, ensure_ascii=False)
+        logging.info(f"Results saved to '{output_file}'")
+    
     return all_results
 
 
