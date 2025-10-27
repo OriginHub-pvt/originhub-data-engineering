@@ -1,6 +1,6 @@
 # RSS Feed Ingestion and Normalization DAG
 
-This project ships an Apache Airflow DAG named `rss_feed_ingestion_and_normalization` that fetches one or more RSS/Atom feeds, stores the raw XML to a local folder, and normalizes them into a unified JSON schema. The DAG is tagged with `rss`, `ingestion`, and `normalization`, so you can quickly filter for it inside the Airflow UI.
+This project ships an Apache Airflow DAG named `rss_feed_ingestion_and_normalization` that fetches one or more RSS/Atom feeds, stores the raw XML in Google Cloud Storage, and normalizes them into a unified JSON schema that is also stored in GCS. The DAG is tagged with `rss`, `ingestion`, and `normalization`, so you can quickly filter for it inside the Airflow UI.
 
 ## Prerequisites
 
@@ -28,27 +28,33 @@ The scheduler, webserver, worker, and supporting services will start in the back
 
 Use the search box or the `rss` tag to find the `rss_feed_ingestion_and_normalization` DAG. Unpause it if needed.
 
+## Create Connection to GCP
+
+1) Go to the web UI -> Admin -> Connections -> Add Connection
+2) ID: google_cloud_default
+3) Connection Type: Google Cloud
+4) In the Extra Fields -> Keyfile JSON, copy the whole JSON of the service account
+5) Save the Connection
+
 ## DAG Workflow
 
-The DAG consists of three sequential tasks:
-1. **fetch_rss_feeds**: Fetches RSS/Atom feed content from provided URLs
-2. **store_rss_feeds**: Saves the raw XML feed content to the local filesystem
-3. **normalize_feeds**: Converts XML feeds into normalized JSON format with a unified schema
+The DAG consists of three tasks with a fan-out after the fetch step:
+1. **fetch_rss_feeds**: Fetches RSS/Atom feed content from the provided URLs and shares it via XCom
+2. **store_rss_feeds**: Persists the raw XML feed content to the `xml-temp-storage` GCS bucket (prefix `rss/xml/` by default)
+3. **normalize_feeds**: Normalizes the fetched XML into JSON using a shared schema and uploads it to the `json-train-storage` GCS bucket (prefix `rss/json/` by default)
 
 ## Trigger the DAG
 
 You can trigger from the UI (`Trigger DAG w/ config`) or the CLI. The DAG accepts the following optional parameters:
 
 - `rss_url`: list of feed URLs (string, comma/newline separated list, or JSON array)
-- `output_dir`: target directory relative to `/opt/airflow/dags` for storing XML files (defaults to `rss_data`)
 - `request_timeout`: HTTP timeout in seconds (default `30`)
 
 Example JSON config:
 
 ```json
 {
-  "rss_url": "https://feeds.arstechnica.com/arstechnica/index/",
-  "output_dir": "rss_data"
+  "rss_url": "https://feeds.arstechnica.com/arstechnica/index/"
 }
 ```
 
@@ -64,33 +70,28 @@ docker compose run --rm airflow-cli \
 
 The DAG produces two types of output:
 
-### Raw XML Feeds
+### GCS Outputs
 
-Fetched feeds are stored under `dags/rss_data/` (or the directory you override with `output_dir`). Each file is timestamped and suffixed with a slug derived from the feed URL, for example:
+- Raw XML feeds are written to `gs://xml-temp-storage/rss/xml/<timestamped_slug>.xml`
+- Normalized JSON feeds are written to `gs://json-train-storage/rss/json/<timestamped_slug>.json`
 
-```
-./dags/rss_data/20251026002601_feeds.arstechnica.com_arstechnica_index.xml
-```
+Each JSON object contains:
 
-### Normalized JSON Feeds
-
-Normalized feeds are stored under `dags/normalized_feeds/` with the same timestamp and slug as the XML file, but with a `.normalized.json` extension:
-
-```
-./dags/normalized_feeds/20251026002601_feeds.arstechnica.com_arstechnica_index.normalized.json
-```
-
-Each normalized JSON file contains an array of feed entries with a unified schema:
 ```json
-[
-  {
-    "title": "Article Title",
-    "url": "https://example.com/article",
-    "description": "Article description text",
-    "updatedDate": "2025-10-26T18:17:04Z",
-    "createdDate": "2025-10-26T18:10:00Z"
-  }
-]
+{
+  "rss_url": "https://example.com/feed",
+  "fetched_at": "2025-10-26T18:10:00Z",
+  "item_count": 42,
+  "items": [
+    {
+      "title": "Article Title",
+      "url": "https://example.com/article",
+      "description": "Plain-text synopsis",
+      "updatedDate": "2025-10-26T18:17:04Z",
+      "createdDate": "2025-10-26T18:10:00Z"
+    }
+  ]
+}
 ```
 
 The normalization process:

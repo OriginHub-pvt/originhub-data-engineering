@@ -13,16 +13,31 @@ Normalize RSS/Atom XML files from ./dags/rss_data into unified JSON schema:
 import os
 import glob
 import json
-import feedparser
-from bs4 import BeautifulSoup
-from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any
 import logging
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+import feedparser
+from airflow.providers.google.cloud.hooks.gcs import GCSHook
+from bs4 import BeautifulSoup
+from urllib.parse import urlparse
+import re
+
+JSON_BUCKET_NAME = "json-train-storage"
 
 # Setup logging
 def setup_logging():
     logging.basicConfig(level=logging.DEBUG, force=True)
 
+def _build_filename(rss_url: str, fetched_at: datetime, extension: str = "xml") -> str:
+    timestamp = fetched_at.strftime("%Y%m%d%H%M%S")
+    return f"{timestamp}_{_slug_from_url(rss_url)}.{extension}"
+
+def _slug_from_url(url: str) -> str:
+    parsed = urlparse(url)
+    parts = [parsed.netloc] + [segment for segment in parsed.path.split("/") if segment]
+    slug = "_".join(filter(None, parts)) or parsed.netloc or "feed"
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", slug)
 
 # ---------- utility functions ----------
 def _to_iso_from_struct(t) -> Optional[str]:
@@ -120,11 +135,15 @@ def normalize_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def parse_xml_content(content: Any) -> List[Dict[str, Any]]:
+    feed = feedparser.parse(content)
+    return [normalize_entry(e) for e in feed.entries]
+
+
 def parse_xml_file(file_path: str) -> List[Dict[str, Any]]:
     with open(file_path, "rb") as f:
         data = f.read()
-    feed = feedparser.parse(data)
-    return [normalize_entry(e) for e in feed.entries]
+    return parse_xml_content(data)
 
 
 # ---------- directory loop ----------
@@ -180,17 +199,70 @@ def dedupe_by_url(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return deduped
 
 
+def normalize_feeds_to_gcs(
+    payload: Dict[str, Any],
+    prefix: str = "",
+    gcp_conn_id: str = "google_cloud_default",
+    gzip: bool = False,
+) -> List[str]:
+    feeds = payload.get("feeds") or []
+    if not feeds:
+        raise ValueError("No feed payloads supplied to normalize.")
+
+    if prefix and not prefix.endswith("/"):
+        prefix += "/"
+
+    hook = GCSHook(gcp_conn_id=gcp_conn_id)
+    saved: List[str] = []
+
+    for feed in feeds:
+        rss_url = feed["rss_url"]
+        fetched_at_str = feed.get("fetched_at")
+        try:
+            fetched_at = (
+                datetime.fromisoformat(fetched_at_str.replace("Z", "+00:00"))
+                if fetched_at_str else datetime.utcnow()
+            )
+        except Exception:
+            logging.warning("Bad fetched_at '%s' for %s; using now()", fetched_at_str, rss_url)
+            fetched_at = datetime.utcnow()
+
+        items = parse_xml_content(feed["content"])
+        deduped = dedupe_by_url(items)
+
+        json_payload = {
+            "rss_url": rss_url,
+            "fetched_at": fetched_at_str,
+            "item_count": len(deduped),
+            "items": deduped,
+        }
+
+        filename = _build_filename(rss_url, fetched_at, extension="json")
+        object_name = f"{prefix}{filename}" if prefix else filename
+
+        hook.upload(
+            bucket_name=JSON_BUCKET_NAME,
+            object_name=object_name,
+            data=json.dumps(json_payload, ensure_ascii=False, indent=2),
+            mime_type="application/json",
+            gzip=gzip,
+        )
+        saved.append(f"gs://{JSON_BUCKET_NAME}/{object_name}")
+
+    logging.info("Normalized %d feeds to JSON GCS objects", len(saved))
+    return saved
+
+
 def normalize_latest_feeds(**context) -> List[str]:
+    """Retained for local workflows and existing tests.
+
+    Processes XML files under the DAG directory and writes normalized JSON files locally.
     """
-    Airflow task wrapper to normalize feeds.
-    This processes all XML files in the rss_data directory.
-    """
-    # Resolve paths relative to the dags directory
     dags_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     input_dir = os.path.join(dags_dir, "rss_data")
     output_dir = os.path.join(dags_dir, "normalized_feeds")
-    
-    logging.info(f"Normalizing feeds from {input_dir} to {output_dir}")
+
+    logging.info("Normalizing feeds from %s to %s", input_dir, output_dir)
     return normalize_all_feeds(input_dir, output_dir)
 
 
