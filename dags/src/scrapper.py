@@ -4,7 +4,9 @@ General web scraper for extracting content from any URL.
 Supports HTML parsing and structured data extraction.
 """
 
+import json
 import logging
+import os
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 from datetime import datetime, UTC
@@ -280,19 +282,112 @@ def scrape_web_content(**context: Any) -> Dict[str, Any]:
     return result
 
 
+def scrape_all_from_json_files(json_dir: str = "dags/filtered_data") -> List[Dict[str, Any]]:
+    """
+    Scrape all URLs from JSON files in the specified directory.
+    
+    Args:
+        json_dir: Directory containing JSON files with feed data
+        
+    Returns:
+        List of scraped results, each containing original metadata and scraped content
+    """
+    scraper = WebScraper()
+    all_results = []
+    
+    # Get all JSON files from the directory
+    if not os.path.exists(json_dir):
+        logging.error(f"Directory {json_dir} does not exist")
+        return []
+    
+    json_files = [f for f in os.listdir(json_dir) if f.endswith('.json')]
+    
+    if not json_files:
+        logging.warning(f"No JSON files found in {json_dir}")
+        return []
+    
+    logging.info(f"Found {len(json_files)} JSON files to process")
+    
+    for json_file in json_files:
+        json_path = os.path.join(json_dir, json_file)
+        logging.info(f"Processing file: {json_file}")
+        
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                feed_items = json.load(f)
+            
+            if not isinstance(feed_items, list):
+                logging.warning(f"{json_file} does not contain a list, skipping")
+                continue
+            
+            logging.info(f"Found {len(feed_items)} URLs in {json_file}")
+            
+            for idx, item in enumerate(feed_items, 1):
+                url = item.get('url')
+                
+                if not url:
+                    logging.warning(f"No URL found in item {idx} of {json_file}, skipping")
+                    continue
+                
+                try:
+                    logging.info(f"Scraping [{idx}/{len(feed_items)}]: {url}")
+                    
+                    # Scrape the URL
+                    scraped_data = scraper.scrape_full(url)
+                    
+                    # Combine original metadata with scraped content
+                    result = {
+                        **item,  # Original metadata (title, url, description, dates)
+                        "scraped_content": scraped_data.get("text_content", ""),
+                        "scraped_metadata": scraped_data.get("metadata", {}),
+                        "scraped_at": scraped_data.get("fetched_at", ""),
+                        "word_count": scraped_data.get("word_count", 0)
+                    }
+                    
+                    all_results.append(result)
+                    logging.info(f"✓ Successfully scraped: {item.get('title', url)}")
+                    
+                except Exception as e:
+                    logging.error(f"✗ Failed to scrape {url}: {e}")
+                    # Use description as fallback content when scraping fails
+                    error_result = {
+                        **item,
+                        "scraped_content": item.get("description", ""),
+                        "scrap_error": str(e),
+                        "scraped_at": datetime.now(UTC).isoformat()
+                    }
+                    all_results.append(error_result)
+        
+        except Exception as e:
+            logging.error(f"Error reading {json_file}: {e}")
+            continue
+    
+    logging.info(f"Completed scraping. Total results: {len(all_results)}")
+    return all_results
+
+
 if __name__ == "__main__":
-    # Example usage
-    import json
+    # Process all JSON files in filtered_data directory
+    results = scrape_all_from_json_files("dags/filtered_data")
     
-    url = "https://arstechnica.com/gadgets/2025/10/a-single-point-of-failure-triggered-the-amazon-outage-affecting-millions/"
-    
-    try:
-        scraper = WebScraper()
-        result = scraper.scrape_full(url)
+    if results:
+        # Create scraped_data directory if it doesn't exist
+        output_dir = "dags/scraped_data"
+        os.makedirs(output_dir, exist_ok=True)
         
-        with open("scraped_data.json", "w", encoding="utf-8") as f:
-            json.dump({"content":result["text_content"]}, f, indent=2, ensure_ascii=False)
-        print("\nFull results saved to 'scraped_data.json'")
+        # Save title and scraped_content from each result
+        output_file = os.path.join(output_dir, "scraped_data.json")
+        scraped_data = [
+            {
+                "title": result.get("title", ""),
+                "scraped_content": result.get("scraped_content", "")
+            }
+            for result in results
+        ]
         
-    except Exception as e:
-        print(f"Error scraping {url}: {e}")
+        with open(output_file, "w", encoding="utf-8") as f:
+            json.dump(scraped_data, f, indent=2, ensure_ascii=False)
+        print(f"\n✓ Scraped {len(results)} articles successfully")
+        print(f"✓ Results saved to '{output_file}'")
+    else:
+        print("\n✗ No results to save")
