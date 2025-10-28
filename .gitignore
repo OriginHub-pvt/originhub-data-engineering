@@ -7,3 +7,4 @@ dags/normalized_feeds
 dags/scraped_data
 dags/filtered_data
 *.DS_Store
+*.venv
