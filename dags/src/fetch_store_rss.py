@@ -9,6 +9,10 @@ from airflow.providers.google.cloud.hooks.gcs import GCSHook
 
 import requests
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 DEFAULT_TIMEOUT = 30
 XML_BUCKET_NAME = os.environ.get("XML_BUCKET_NAME")
 

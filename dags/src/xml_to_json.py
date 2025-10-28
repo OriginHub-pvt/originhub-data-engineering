@@ -23,6 +23,10 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 import re
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 JSON_BUCKET_NAME = os.environ.get("JSON_BUCKET_NAME")
 
 # Setup logging
