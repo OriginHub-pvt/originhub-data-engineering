@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import os
 import logging
 import re
 from datetime import datetime
@@ -10,7 +10,7 @@ from airflow.providers.google.cloud.hooks.gcs import GCSHook
 import requests
 
 DEFAULT_TIMEOUT = 30
-XML_BUCKET_NAME = "xml-temp-storage"
+XML_BUCKET_NAME = os.environ.get("XML_BUCKET_NAME")
 
 def _normalize_urls(raw: Any) -> List[str]:
     if raw is None:
