@@ -4,4 +4,6 @@ config
 logs
 dags/rss_data
 dags/normalized_feeds
+dags/scraped_data
+dags/filtered_data
 *.DS_Store
