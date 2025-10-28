@@ -1,0 +1,52 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Airflow
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation
+*.md
+!docker/README.md
+
+# Docker
+docker-compose*.yaml
+Dockerfile*
+
+# Data directories (exclude from image)
+dags/rss_data/
+dags/scraped_data/
+dags/normalized_feeds/
+dags/filtered_data/
+
+# Test files
+tests/
+*.pytest_cache/
+
+# macOS
+.DS_Store
+
+# Environment
+.env
+.env.local
+

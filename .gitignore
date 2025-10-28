@@ -8,3 +8,4 @@ dags/scraped_data
 dags/filtered_data
 *.DS_Store
 *.venv
+volumes
