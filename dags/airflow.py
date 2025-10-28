@@ -8,7 +8,8 @@ from src import (
     store_rss_feeds,
     normalize_feeds_to_gcs,
     scrape_all_from_json_files,
-    filter_articles
+    filter_articles,
+    summarize_record
 )
 
 default_args = {
@@ -63,5 +64,24 @@ with DAG(
     normalize_feeds_task >> filter_articles_task
     filter_articles_task >> scrape_content_task
 
+with DAG(
+    dag_id="summarize_and_store_weaviate",
+    description="Summarize article content and store the summarized record into Weaviate.",
+    default_args=default_args,
+    start_date=datetime(2024, 1, 1),
+    catchup=False,
+    tags=["summarization", "weaviate", "embedding", "originhub"],
+    params={
+        "article": {},
+    },
+) as summarize_and_store_dag:
+
+    summarize_task = PythonOperator(
+        task_id="summarize_record",
+        python_callable=summarize_record,
+        op_kwargs={"record": "{{ params.article }}"},
+    )  
+
 if __name__ == "__main__":
     dag.test()
+    

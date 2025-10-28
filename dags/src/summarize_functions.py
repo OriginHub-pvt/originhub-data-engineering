@@ -7,8 +7,8 @@ MODEL_NAME = "google/pegasus-cnn_dailymail"
 summarizer = pipeline("summarization", model=MODEL_NAME)
 
 def summarize_record(record):
-    """Summarize the 'description' field in a JSON record."""
-    desc = record.get("description", "")
+    """Summarize the 'content' field in a JSON record."""
+    desc = record.get("content", "")
     if not desc.strip():
         record["summary"] = ""
         return record
