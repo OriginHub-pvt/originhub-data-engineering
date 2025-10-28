@@ -53,7 +53,7 @@ x-airflow-common: &airflow-common
     - .env
   build:
     context: .
-    dockerfile: docker/airflow/Dockerfile
+    dockerfile: Dockerfile
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
