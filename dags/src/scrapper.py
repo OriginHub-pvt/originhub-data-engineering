@@ -282,85 +282,58 @@ def scrape_web_content(**context: Any) -> Dict[str, Any]:
     return result
 
 
-def scrape_all_from_json_files(json_dir: str = "dags/filtered_data") -> List[Dict[str, Any]]:
+def scrape_all_from_json_files(**context: Any) -> List[Dict[str, Any]]:
     """
     Scrape all URLs from JSON files in the specified directory.
     
     Args:
-        json_dir: Directory containing JSON files with feed data
+        json_dir: Filtered JSON data
         
     Returns:
         List of scraped results, each containing original metadata and scraped content
     """
     scraper = WebScraper()
     all_results = []
+
+    feed_items = context.get("payload") or context["ti"].xcom_pull(task_ids="filter_articles")
     
-    # Get all JSON files from the directory
-    if not os.path.exists(json_dir):
-        logging.error(f"Directory {json_dir} does not exist")
-        return []
+    logging.info(f"Found {len(feed_items)} feeds.")
     
-    json_files = [f for f in os.listdir(json_dir) if f.endswith('.json')]
-    
-    if not json_files:
-        logging.warning(f"No JSON files found in {json_dir}")
-        return []
-    
-    logging.info(f"Found {len(json_files)} JSON files to process")
-    
-    for json_file in json_files:
-        json_path = os.path.join(json_dir, json_file)
-        logging.info(f"Processing file: {json_file}")
+    for idx, item in enumerate(feed_items, 1):
+        url = item.get('url')
+        
+        if not url:
+            logging.warning(f"No URL found in item {idx} with title {item.title}, skipping")
+            continue
         
         try:
-            with open(json_path, 'r', encoding='utf-8') as f:
-                feed_items = json.load(f)
+            logging.info(f"Scraping [{idx}/{len(feed_items)}]: {url}")
             
-            if not isinstance(feed_items, list):
-                logging.warning(f"{json_file} does not contain a list, skipping")
-                continue
+            # Scrape the URL
+            scraped_data = scraper.scrape_full(url)
             
-            logging.info(f"Found {len(feed_items)} URLs in {json_file}")
+            # Combine original metadata with scraped content
+            result = {
+                **item,  # Original metadata (title, url, description, dates)
+                "scraped_content": scraped_data.get("text_content", ""),
+                "scraped_metadata": scraped_data.get("metadata", {}),
+                "scraped_at": scraped_data.get("fetched_at", ""),
+                "word_count": scraped_data.get("word_count", 0)
+            }
             
-            for idx, item in enumerate(feed_items, 1):
-                url = item.get('url')
-                
-                if not url:
-                    logging.warning(f"No URL found in item {idx} of {json_file}, skipping")
-                    continue
-                
-                try:
-                    logging.info(f"Scraping [{idx}/{len(feed_items)}]: {url}")
-                    
-                    # Scrape the URL
-                    scraped_data = scraper.scrape_full(url)
-                    
-                    # Combine original metadata with scraped content
-                    result = {
-                        **item,  # Original metadata (title, url, description, dates)
-                        "scraped_content": scraped_data.get("text_content", ""),
-                        "scraped_metadata": scraped_data.get("metadata", {}),
-                        "scraped_at": scraped_data.get("fetched_at", ""),
-                        "word_count": scraped_data.get("word_count", 0)
-                    }
-                    
-                    all_results.append(result)
-                    logging.info(f"✓ Successfully scraped: {item.get('title', url)}")
-                    
-                except Exception as e:
-                    logging.error(f"✗ Failed to scrape {url}: {e}")
-                    # Use description as fallback content when scraping fails
-                    error_result = {
-                        **item,
-                        "scraped_content": item.get("description", ""),
-                        "scrap_error": str(e),
-                        "scraped_at": datetime.now(UTC).isoformat()
-                    }
-                    all_results.append(error_result)
-        
+            all_results.append(result)
+            logging.info(f"✓ Successfully scraped: {item.get('title', url)}")
+            
         except Exception as e:
-            logging.error(f"Error reading {json_file}: {e}")
-            continue
+            logging.error(f"✗ Failed to scrape {url}: {e}")
+            # Use description as fallback content when scraping fails
+            error_result = {
+                **item,
+                "scraped_content": item.get("description", ""),
+                "scrap_error": str(e),
+                "scraped_at": datetime.now(UTC).isoformat()
+            }
+            all_results.append(error_result)
     
     logging.info(f"Completed scraping. Total results: {len(all_results)}")
     

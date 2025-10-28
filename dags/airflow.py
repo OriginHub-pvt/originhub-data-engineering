@@ -56,7 +56,7 @@ with DAG(
     scrape_content_task = PythonOperator(
         task_id="scrape_web_content",
         python_callable=scrape_all_from_json_files,
-        op_kwargs={"json_dir": "dags/filtered_data"},  # or change to use XCom later
+        op_kwargs={"payload": filter_articles_task.output},
     )
 
     fetch_rss_task >> [store_rss_task, normalize_feeds_task]
