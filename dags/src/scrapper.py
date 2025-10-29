@@ -285,8 +285,8 @@ def scrape_web_content(**context: Any) -> Dict[str, Any]:
 
 def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
     """
-    Scrape all URLs from filtered JSON feed items and automatically trigger summarization DAGs.
-    This version avoids returning or storing large data locally to keep the pipeline lightweight.
+    Scrape all URLs from filtered JSON feed items and automatically trigger summarization DAGs
+    using the Airflow REST API (works for Airflow 3.x hosted on localhost:8080).
 
     Args:
         context: Airflow task context, containing XCom or upstream task outputs
@@ -294,9 +294,16 @@ def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
     Returns:
         Dictionary containing basic summary metrics (triggered and failed counts)
     """
-    # Initialize scraper and Airflow client
     scraper = WebScraper()
-    client = Client(None, None)
+
+    # Airflow API base URL (for local Airflow instance)
+    airflow_base_url = os.getenv("AIRFLOW_API_BASE_URL", "http://localhost:8080/api/v1")
+    dag_id = "summarize_and_store_weaviate"
+    api_endpoint = f"{airflow_base_url}/dags/{dag_id}/dagRuns"
+
+    # Optional authentication (if Airflow UI login is enabled)
+    airflow_user = os.getenv("AIRFLOW_USERNAME", "airflow")
+    airflow_password = os.getenv("AIRFLOW_PASSWORD", "airflow")
 
     # Retrieve feed items from upstream task (filter_articles)
     feed_items = context.get("payload") or context["ti"].xcom_pull(task_ids="filter_articles")
@@ -304,7 +311,6 @@ def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
 
     logging.info(f"Found {total_feeds} feeds to scrape and summarize.")
 
-    # Counters for reporting
     triggered = 0
     failed = 0
 
@@ -313,7 +319,6 @@ def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
         title = item.get("title", f"Article {idx}")
 
         if not url:
-            # Skip entries without valid URL
             logging.warning(f"[{idx}/{total_feeds}] Skipping item with no URL ({title}).")
             failed += 1
             continue
@@ -325,24 +330,31 @@ def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
 
             # --- Step 2: Merge scraped data with original feed metadata ---
             result = {
-                **item,  # Include original title, description, and source data
+                **item,
                 "scraped_content": scraped_data.get("text_content", ""),
                 "scraped_metadata": scraped_data.get("metadata", {}),
                 "scraped_at": scraped_data.get("fetched_at", ""),
                 "word_count": scraped_data.get("word_count", 0),
             }
 
-            # --- Step 3: Trigger the summarization + storage DAG ---
-            client.trigger_dag(
-                dag_id="summarize_and_store_weaviate",
-                conf={"article": result},  # Pass single article as DAG config
+            # --- Step 3: Trigger summarization DAG via REST API ---
+            response = requests.post(
+                api_endpoint,
+                json={"conf": {"article": result}},
+                headers={"Content-Type": "application/json"},
+                auth=(airflow_user, airflow_password),  # comment out if auth disabled
+                timeout=15,
             )
-            logging.info(f"Triggered summarize_and_store_weaviate for '{title}'")
+            response.raise_for_status()
+
+            logging.info(f"Triggered {dag_id} for '{title}' successfully")
             triggered += 1
 
+        except requests.exceptions.RequestException as api_err:
+            logging.error(f"API error while triggering {dag_id} for {url}: {api_err}")
+            failed += 1
         except Exception as e:
-            # Catch all network / parsing / runtime errors and continue
-            logging.error(f"Failed to scrape {url}: {e}")
+            logging.error(f"✗ Failed to scrape or trigger for {url}: {e}")
             failed += 1
 
     logging.info(f"Completed scraping: {triggered} triggered, {failed} failed.")

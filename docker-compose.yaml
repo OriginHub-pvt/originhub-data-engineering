@@ -64,6 +64,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://airflow-apiserver:8080/execution/"
+    AIRFLOW__API__AUTH_BACKEND: "airflow.api.auth.backend.basic_auth"
     # yamllint disable rule:line-length
     # Use simple http server on scheduler for health checks
     # See https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/logging-monitoring/check-health.html#scheduler-health-check-server
@@ -126,6 +127,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__API__AUTH_BACKEND: "airflow.api.auth.backend.basic_auth"
     restart: always
     depends_on:
       <<: *airflow-common-depends-on
@@ -141,6 +145,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__API__AUTH_BACKEND: "airflow.api.auth.backend.basic_auth"
     restart: always
     depends_on:
       <<: *airflow-common-depends-on
@@ -160,6 +167,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__API__AUTH_BACKEND: "airflow.api.auth.backend.basic_auth"
     restart: always
     depends_on:
       <<: *airflow-common-depends-on
@@ -183,6 +193,7 @@ services:
       # Required to handle warm shutdown of the celery workers properly
       # See https://airflow.apache.org/docs/docker-stack/entrypoint.html#signal-propagation
       DUMB_INIT_SETSID: "0"
+      AIRFLOW__API__AUTH_BACKEND: "airflow.api.auth.backend.basic_auth"
     restart: always
     depends_on:
       <<: *airflow-common-depends-on
@@ -204,6 +215,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__API__AUTH_BACKEND: "airflow.api.auth.backend.basic_auth"
     restart: always
     depends_on:
       <<: *airflow-common-depends-on
@@ -299,6 +313,7 @@ services:
       _AIRFLOW_WWW_USER_CREATE: "true"
       _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
       _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+      AIRFLOW__API__AUTH_BACKEND: "airflow.api.auth.backend.basic_auth"
       # _PIP_ADDITIONAL_REQUIREMENTS: "pandas scikit-learn feedparser beautifulsoup4"
     user: "0:0"
 
@@ -345,21 +360,21 @@ services:
       - --host
       - 0.0.0.0
       - --port
-      - '8080'
+      - "8080"
       - --scheme
       - http
     ports:
-      - "8081:8080"  #I have used 8081 to avoid conflict withj Airflow
+      - "8081:8080" #I have used 8081 to avoid conflict withj Airflow
       - "50051:50051"
     volumes:
       - ./volumes/weaviate_data:/var/lib/weaviate # i used bind mount here os that the data can be accessed from our local machines.
     restart: on-failure:0
     environment:
       QUERY_DEFAULTS_LIMIT: 25
-      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
-      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
-      CLUSTER_HOSTNAME: 'node1'
-      ENABLE_MODULES: 'text2vec-huggingface'
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      CLUSTER_HOSTNAME: "node1"
+      ENABLE_MODULES: "text2vec-huggingface"
       HUGGINGFACE_APIKEY: ${HUGGINGFACE_APIKEY} #setting up the api key here so we dont hwave to set it up each time we use huggingface module
 
 # volumes:
