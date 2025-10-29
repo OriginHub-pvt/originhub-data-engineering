@@ -16,7 +16,14 @@ from bs4 import BeautifulSoup
 
 logging.basicConfig(level=logging.INFO)
 
-from airflow.api.client.local_client import Client
+# Airflow API base URL (for local Airflow instance)
+airflow_base_url = os.getenv("AIRFLOW_API_BASE_URL", "http://localhost:8080")
+dag_id = "summarize_and_store_weaviate"
+api_endpoint = f"{airflow_base_url}/api/v2/dags/{dag_id}/dagRuns"
+
+# Optional authentication (if Airflow UI login is enabled)
+airflow_user = os.getenv("AIRFLOW_USERNAME", "airflow")
+airflow_password = os.getenv("AIRFLOW_PASSWORD", "airflow")
 
 class WebScraper:
     """
@@ -296,15 +303,6 @@ def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
     """
     scraper = WebScraper()
 
-    # Airflow API base URL (for local Airflow instance)
-    airflow_base_url = os.getenv("AIRFLOW_API_BASE_URL", "http://localhost:8080/api/v1")
-    dag_id = "summarize_and_store_weaviate"
-    api_endpoint = f"{airflow_base_url}/dags/{dag_id}/dagRuns"
-
-    # Optional authentication (if Airflow UI login is enabled)
-    airflow_user = os.getenv("AIRFLOW_USERNAME", "airflow")
-    airflow_password = os.getenv("AIRFLOW_PASSWORD", "airflow")
-
     # Retrieve feed items from upstream task (filter_articles)
     feed_items = context.get("payload") or context["ti"].xcom_pull(task_ids="filter_articles")
     total_feeds = len(feed_items) if feed_items else 0
@@ -323,6 +321,8 @@ def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
             failed += 1
             continue
 
+        result={**item}
+
         try:
             # --- Step 1: Scrape the URL content ---
             logging.info(f"Scraping [{idx}/{total_feeds}]: {url}")
@@ -337,29 +337,50 @@ def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
                 "word_count": scraped_data.get("word_count", 0),
             }
 
-            # --- Step 3: Trigger summarization DAG via REST API ---
-            response = requests.post(
-                api_endpoint,
-                json={"conf": {"article": result}},
-                headers={"Content-Type": "application/json"},
-                auth=(airflow_user, airflow_password),  # comment out if auth disabled
-                timeout=15,
-            )
-            response.raise_for_status()
-
-            logging.info(f"Triggered {dag_id} for '{title}' successfully")
-            triggered += 1
-
         except requests.exceptions.RequestException as api_err:
             logging.error(f"API error while triggering {dag_id} for {url}: {api_err}")
             failed += 1
         except Exception as e:
             logging.error(f"✗ Failed to scrape or trigger for {url}: {e}")
             failed += 1
+        finally:
+            logging.info("Finally block reached.")
+            # --- Step 3: Trigger summarization DAG via REST API ---
+            token = generate_JWT()
+            response = requests.post(
+                api_endpoint,
+                json={"conf": {"article": result}},
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {token}"
+                },
+            )
+            response.raise_for_status()
+
+            logging.info(f"Triggered {dag_id} for '{title}' successfully")
+            triggered += 1
 
     logging.info(f"Completed scraping: {triggered} triggered, {failed} failed.")
     return {"triggered": triggered, "failed": failed}
 
+def generate_JWT():
+    """
+    Generate a JWT token for Airflow API authentication.
+    Returns:
+        A JWT token string
+    """
+    endpoint_url = f"{airflow_base_url}/auth/token"
+    headers = {
+        "Content-Type": "application/json"
+    }
+    data = {
+        "username": airflow_user,
+        "password": airflow_password
+    }
+
+    response = requests.post(endpoint_url, headers=headers, json=data)
+
+    return response.text.access_token
 
 if __name__ == "__main__":
     # Process all JSON files in filtered_data directory
