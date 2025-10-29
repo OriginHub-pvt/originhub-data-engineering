@@ -1,10 +1,14 @@
 ## DAGS/src Module Reference
 
-This directory owns every helper that powers the Airflow pipeline pictured below. The workflow currently fetches RSS feeds, stores the raw XML, normalizes the feed items, filters them with an ML model, and scrapes the surviving URLs. Upcoming work will add a summarization task and a final writer that pushes summarized content to a vector database (VDB).
+This directory owns every helper that powers the two cooperating Airflow DAGs. The ingestion DAG fetches RSS feeds, stores the raw XML, normalizes entries, filters them with an ML model, and scrapes the surviving URLs. Each scraped article then triggers a second DAG that summarizes the content and stores it in Weaviate.
 
 ```
 fetch_rss_feeds ─┬─> store_rss_feeds
-                  └─> normalize_feeds ──> filter_articles ──> scrape_web_content ──> summarize_task ──> VDB load
+                  └─> normalize_feeds ──> filter_articles ──> scrape_web_content
+                                                           │
+                                                           ▼
+                                              summarize_and_store_weaviate DAG
+                                              └─> summarize_record ──> store_in_weaviate
 ```
 
 Every file in `dags/src/` participates in that flow. The sections below document each module in detail, explaining what it exports, which environment variables it reads, and how it contributes to the DAG.
@@ -20,6 +24,7 @@ Central import surface that keeps the DAG definition clean. It re-exports:
 - `filter_articles` from `filter_articles.py`
 - `WebScraper`, `scrape_url`, `scrape_web_content`, `scrape_all_from_json_files` from `scrapper.py`
 - `summarize_record`, `serialize_json` from `summarize_functions.py`
+- `store_in_weaviate` from `weaviate_store.py`
 
 This allows `dags/airflow.py` (and future DAGs) to simply `from src import ...` without juggling multiple module paths.
 
@@ -106,7 +111,7 @@ Dependencies:
 
 ### `scrapper.py`
 
-Purpose: Retrieve full web pages for each filtered article, extract metadata, plain text, links, and images, and optionally perform batch scraping from stored JSON files.
+Purpose: Retrieve full web pages for each filtered article, extract metadata/text/links/images, and trigger the summarization DAG for every successfully scraped record. Also supports bulk/offline scraping from JSON files.
 
 Key pieces:
 
@@ -114,8 +119,8 @@ Key pieces:
 | --- | --- |
 | `WebScraper` | Class that handles HTTP requests (with SSL retry), HTML parsing via `BeautifulSoup`, metadata extraction, text cleaning, link/image resolution, and word counts. |
 | `scrape_url` | Convenience wrapper to scrape a single URL with a fresh `WebScraper` instance. |
-| `scrape_web_content` | Airflow task function. Expects a single URL via DAG params or `dag_run.conf`, returns a dict containing scraped content, metadata, and word counts. In the pipeline this sits after `filter_articles`. |
-| `scrape_all_from_json_files` | Iterates over JSON files in `dags/filtered_data`, scrapes each URL, and writes a summary (`title`, `scraped_content`) to `dags/scraped_data/scraped_data.json`. Useful for bulk offline runs. |
+| `scrape_web_content` | Airflow task function used for single-URL scraping (manual/ad-hoc runs). Returns the scraped payload to the caller. |
+| `scrape_all_from_json_files` | Production task used by the ingestion DAG. Iterates over filtered feed items, scrapes each URL, builds an enriched record, and uses the Airflow local client to trigger the `summarize_and_store_weaviate` DAG (one trigger per article). Returns aggregate metrics (`triggered` / `failed`). |
 
 Contribution to the DAG:
 
