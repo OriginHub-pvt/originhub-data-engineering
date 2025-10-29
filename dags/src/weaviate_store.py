@@ -1,7 +1,6 @@
 import os
 import logging
 import weaviate
-from datetime import datetime
 
 from config import load_dotenv
 
@@ -24,7 +23,7 @@ def get_client():
     """
     Create and return a configured Weaviate client using environment variables.
     """
-    weaviate_url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
+    weaviate_url = os.getenv("WEAVIATE_URL", "http://localhost:8081")
 
     logger.info(f"Connecting to Weaviate at {weaviate_url}")
 
@@ -64,7 +63,6 @@ def ensure_schema(client):
                 "properties": [
                     {"name": "title", "dataType": ["text"]},
                     {"name": "summary", "dataType": ["text"]},
-                    {"name": "publishedAt", "dataType": ["date"]},
                 ],
             }
             client.schema.create_class(schema)
@@ -85,12 +83,10 @@ def store_in_weaviate(record: dict):
 
     title = record.get("title", "")
     summary = record.get("summary", "")
-    pub_date = record.get("pubDate", datetime.now().isoformat())
 
     data = {
         "title": title,
         "summary": summary,
-        "publishedAt": pub_date,
     }
 
     try:
