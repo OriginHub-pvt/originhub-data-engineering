@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 
 logging.basicConfig(level=logging.INFO)
 
+from airflow.api.client.local_client import Client
 
 class WebScraper:
     """
@@ -282,82 +283,70 @@ def scrape_web_content(**context: Any) -> Dict[str, Any]:
     return result
 
 
-def scrape_all_from_json_files(**context: Any) -> List[Dict[str, Any]]:
+def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
     """
-    Scrape all URLs from JSON files in the specified directory.
-    
-    Args:
-        json_dir: Filtered JSON data
-        
-    Returns:
-        List of scraped results, each containing original metadata and scraped content
-    """
-    scraper = WebScraper()
-    all_results = []
+    Scrape all URLs from filtered JSON feed items and automatically trigger summarization DAGs.
+    This version avoids returning or storing large data locally to keep the pipeline lightweight.
 
+    Args:
+        context: Airflow task context, containing XCom or upstream task outputs
+
+    Returns:
+        Dictionary containing basic summary metrics (triggered and failed counts)
+    """
+    # Initialize scraper and Airflow client
+    scraper = WebScraper()
+    client = Client(None, None)
+
+    # Retrieve feed items from upstream task (filter_articles)
     feed_items = context.get("payload") or context["ti"].xcom_pull(task_ids="filter_articles")
-    
-    logging.info(f"Found {len(feed_items)} feeds.")
-    
-    for idx, item in enumerate(feed_items, 1):
-        url = item.get('url')
-        
+    total_feeds = len(feed_items) if feed_items else 0
+
+    logging.info(f"Found {total_feeds} feeds to scrape and summarize.")
+
+    # Counters for reporting
+    triggered = 0
+    failed = 0
+
+    for idx, item in enumerate(feed_items or [], 1):
+        url = item.get("url")
+        title = item.get("title", f"Article {idx}")
+
         if not url:
-            logging.warning(f"No URL found in item {idx} with title {item.title}, skipping")
+            # Skip entries without valid URL
+            logging.warning(f"[{idx}/{total_feeds}] Skipping item with no URL ({title}).")
+            failed += 1
             continue
-        
+
         try:
-            logging.info(f"Scraping [{idx}/{len(feed_items)}]: {url}")
-            
-            # Scrape the URL
+            # --- Step 1: Scrape the URL content ---
+            logging.info(f"Scraping [{idx}/{total_feeds}]: {url}")
             scraped_data = scraper.scrape_full(url)
-            
-            # Combine original metadata with scraped content
+
+            # --- Step 2: Merge scraped data with original feed metadata ---
             result = {
-                **item,  # Original metadata (title, url, description, dates)
+                **item,  # Include original title, description, and source data
                 "scraped_content": scraped_data.get("text_content", ""),
                 "scraped_metadata": scraped_data.get("metadata", {}),
                 "scraped_at": scraped_data.get("fetched_at", ""),
-                "word_count": scraped_data.get("word_count", 0)
+                "word_count": scraped_data.get("word_count", 0),
             }
-            
-            all_results.append(result)
-            logging.info(f"✓ Successfully scraped: {item.get('title', url)}")
-            
+
+            # --- Step 3: Trigger the summarization + storage DAG ---
+            client.trigger_dag(
+                dag_id="summarize_and_store_weaviate",
+                conf={"article": result},  # Pass single article as DAG config
+            )
+            logging.info(f"Triggered summarize_and_store_weaviate for '{title}'")
+            triggered += 1
+
         except Exception as e:
-            logging.error(f"✗ Failed to scrape {url}: {e}")
-            # Use description as fallback content when scraping fails
-            error_result = {
-                **item,
-                "scraped_content": item.get("description", ""),
-                "scrap_error": str(e),
-                "scraped_at": datetime.now(UTC).isoformat()
-            }
-            all_results.append(error_result)
-    
-    logging.info(f"Completed scraping. Total results: {len(all_results)}")
-    
-    # Save results to scraped_data directory
-    if all_results:
-        # Create scraped_data directory if it doesn't exist
-        output_dir = "dags/scraped_data"
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Save title and scraped_content from each result
-        output_file = os.path.join(output_dir, "scraped_data.json")
-        scraped_data = [
-            {
-                "title": result.get("title", ""),
-                "scraped_content": result.get("scraped_content", "")
-            }
-            for result in all_results
-        ]
-        
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(scraped_data, f, indent=2, ensure_ascii=False)
-        logging.info(f"Results saved to '{output_file}'")
-    
-    return all_results
+            # Catch all network / parsing / runtime errors and continue
+            logging.error(f"Failed to scrape {url}: {e}")
+            failed += 1
+
+    logging.info(f"Completed scraping: {triggered} triggered, {failed} failed.")
+    return {"triggered": triggered, "failed": failed}
 
 
 if __name__ == "__main__":
