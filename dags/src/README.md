@@ -124,14 +124,16 @@ Key pieces:
 
 Contribution to the DAG:
 
-- `scrape_web_content` executes after `filter_articles`, providing the raw text that the future `summarize_task` will consume. It is the last current node in the flow before summarization/VDB storage is added.
+- `scrape_web_content` remains available for manual or ad-hoc scraping flows (e.g., debugging a single URL).
+- `scrape_all_from_json_files` is the production task that processes the filtered feed list and triggers the summarization DAG per article.
 
 Implementation notes:
 
 - Uses a desktop-style User-Agent to avoid trivial blocking.
 - Removes scripts/styles before text extraction to reduce noise.
 - Resolves relative URLs for links and images.
-- Handles per-item errors by logging and providing fallback content where possible.
+- Handles per-item errors by logging, tracking failures, and continuing without blocking subsequent items.
+- Avoids returning bulky payloads; instead it triggers the summarization DAG so data is passed via `dag_run.conf` rather than XCom.
 
 ---
 
@@ -144,16 +146,42 @@ Key pieces:
 | Symbol | Description |
 | --- | --- |
 | `summarizer = pipeline("summarization", model="google/pegasus-cnn_dailymail")` | Pre-loaded Hugging Face summarization pipeline. |
-| `summarize_record(record)` | Accepts a dict with a `content` key, chunks long text (1,000 characters by default), runs the summarizer on each chunk, stitches the results into a `summary` field, and returns the enriched record. |
+| `summarize_record(record)` | Accepts a dict containing scraped article metadata (`scraped_content`, `title`, etc.), chunks long text (1,000 characters by default), runs the summarizer on each chunk, stitches the results into a `summary` field, and returns the enriched record. |
 | `serialize_json(data)` | Takes a list of dictionaries and converts it into a `BytesIO` object containing pretty-printed JSON—convenient for uploading to GCS or S3 directly. |
 
 Contribution to the DAG:
 
-- Will be used by the forthcoming `summarize_task` (inserted between `scrape_web_content` and the VDB writer). Summaries generated here can be passed downstream to the VDB loader without re-summarizing in that task.
+- Serves as the first task in the `summarize_and_store_weaviate` DAG. Each trigger from `scrape_all_from_json_files` passes an article payload, which `summarize_record` enriches with an abstractive summary before handing it to the storage task.
 
 Dependencies:
 
 - `transformers`
+
+---
+
+### `weaviate_store.py`
+
+Purpose: Manage connectivity with Weaviate and persist summarized articles.
+
+Key pieces:
+
+| Symbol | Description |
+| --- | --- |
+| `get_client` | Builds a Weaviate client using `WEAVIATE_URL` and logs readiness status. |
+| `ensure_schema` | Creates the `ArticleSummary` schema (text2vec-transformers) if it does not already exist. |
+| `store_in_weaviate` | Airflow task function invoked by the summarization DAG. Writes the `title` and `summary` of each article into Weaviate. |
+
+Environment variables:
+
+- `WEAVIATE_URL` (default `http://localhost:8081`)
+
+Contribution to the DAG:
+
+- Acts as the terminal task of `summarize_and_store_weaviate`, ensuring summaries are persisted in the vector database for semantic retrieval.
+
+Dependencies:
+
+- `weaviate`, `dotenv`
 
 ---
 
@@ -169,8 +197,8 @@ Dependencies:
 2. `store_rss_feeds` uploads raw XML files to `gs://<XML_BUCKET_NAME>/…`, preserving an unmodified record of the feed.
 3. `normalize_feeds_to_gcs` converts the same payload to tidy JSON and writes it to `gs://<JSON_BUCKET_NAME>/…`.
 4. `filter_articles` loads the ML classifier from GCS, filters the normalized entries, and pushes only relevant articles forward.
-5. `scrape_web_content` fetches the full HTML for each remaining article, cleaning it for later summarization.
-6. `summarize_task` will call helpers in `summarize_functions.py` to add concise summaries.
-7. final node writes the summaries into a vector database or other target store for retrieval.
+5. `scrape_all_from_json_files` fetches the full HTML for each remaining article, assembles an enriched payload, and triggers the `summarize_and_store_weaviate` DAG once per article.
+6. `summarize_record` (DAG #2) generates abstractive summaries from the scraped text.
+7. `store_in_weaviate` persists the summarized payload into the `ArticleSummary` class inside Weaviate.
 
-This modular design keeps network I/O, parsing, ML inference, scraping, and future summarization/storage concerns isolated while still composing into a single DAG. When you wire up the new tasks, simply import from `src` and follow the patterns already in place.
+This modular design keeps network I/O, parsing, ML inference, scraping, summarization, and storage concerns isolated while still composing into a seamless multi-DAG pipeline. When you add new functionality, implement the helper here, expose it via `__init__.py`, and reference it from the relevant DAG.
