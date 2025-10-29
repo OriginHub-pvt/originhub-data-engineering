@@ -51,7 +51,9 @@ x-airflow-common: &airflow-common
   # image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:3.1.0}
   env_file:
     - .env
-  build: .
+  build:
+    context: .
+    dockerfile: Dockerfile
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
@@ -91,7 +93,7 @@ services:
       POSTGRES_PASSWORD: airflow
       POSTGRES_DB: airflow
     volumes:
-      - postgres-db-volume:/var/lib/postgresql/data
+      - ./volumes/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "airflow"]
       interval: 10s
@@ -337,5 +339,29 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
-volumes:
-  postgres-db-volume:
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.33.2
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - '8080'
+      - --scheme
+      - http
+    ports:
+      - "8081:8080"  #I have used 8081 to avoid conflict withj Airflow
+      - "50051:50051"
+    volumes:
+      - ./volumes/weaviate_data:/var/lib/weaviate # i used bind mount here os that the data can be accessed from our local machines.
+    restart: on-failure:0
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+      CLUSTER_HOSTNAME: 'node1'
+      ENABLE_MODULES: 'text2vec-huggingface'
+      HUGGINGFACE_APIKEY: ${HUGGINGFACE_APIKEY} #setting up the api key here so we dont hwave to set it up each time we use huggingface module
+
+# volumes:
+#   postgres-db-volume:
+#   weaviate_data:
