@@ -2,7 +2,7 @@ import os
 import logging
 import weaviate
 
-from config import load_dotenv
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)

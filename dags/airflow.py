@@ -2,7 +2,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.providers.standard.operators.python import PythonOperator
-from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 
 from src import (
     fetch_rss_feeds,
@@ -62,34 +61,9 @@ with DAG(
         op_kwargs={"payload": filter_articles_task.output},
     )
 
-    def trigger_summary_dags(**context):
-        """Trigger the summarize_and_store_weaviate DAG once for each article."""
-        articles = context["ti"].xcom_pull(task_ids="scrape_web_content")
-
-        if not articles:
-            print("No articles found to summarize.")
-            return
-
-        for idx, article in enumerate(articles):
-            trigger = TriggerDagRunOperator(
-                task_id=f"trigger_summary_dag_{idx}",
-                trigger_dag_id="summarize_and_store_weaviate",
-                conf={"article": article},
-                wait_for_completion=False,
-            )
-            trigger.execute(context)
-            print(f"Triggered summarization DAG for article #{idx+1}")
-
-    trigger_summary_task = PythonOperator(
-        task_id="trigger_summary_dags",
-        python_callable=trigger_summary_dags,
-        provide_context=True,
-    )
-
     fetch_rss_task >> [store_rss_task, normalize_feeds_task]
     normalize_feeds_task >> filter_articles_task
     filter_articles_task >> scrape_content_task
-    scrape_content_task >> trigger_summary_task
 
 with DAG(
     dag_id="summarize_and_store_weaviate",
