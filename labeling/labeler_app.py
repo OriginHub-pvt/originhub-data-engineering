@@ -32,7 +32,7 @@ class JsonLabelingApp:
 
     def run_app(self) -> None:
         """Main app execution flow."""
-        st.title("🧩 JSON Labeling App")
+        st.title("JSON Labeling App")
         uploaded_file = st.file_uploader("Upload your JSON file", type=["json"])
 
         if uploaded_file:
@@ -42,13 +42,13 @@ class JsonLabelingApp:
             self.display_progress()
             self.display_save_section()
         else:
-            st.info("👆 Upload a JSON file containing a list of items to start labeling.")
+            st.info("Upload a JSON file containing a list of items to start labeling.")
 
     def load_json(self, uploaded_file) -> None:
         """Load JSON data and validate it."""
         self.data = json.load(uploaded_file)
         if not isinstance(self.data, list):
-            st.error("❌ JSON must be a list of objects!")
+            st.error("JSON must be a list of objects!")
             st.stop()
 
         # Initialize labels if first time loading
@@ -101,9 +101,9 @@ class JsonLabelingApp:
         # Label Buttons
         col1, col2 = st.columns(2)
         with col1:
-            st.button("✅ Relevant (1)", on_click=self._label_and_next, args=(1,), key=f"rel_{idx}")
+            st.button("Relevant (1)", on_click=self._label_and_next, args=(1,), key=f"rel_{idx}")
         with col2:
-            st.button("❌ Irrelevant (0)", on_click=self._label_and_next, args=(0,), key=f"irrel_{idx}")
+            st.button("Irrelevant (0)", on_click=self._label_and_next, args=(0,), key=f"irrel_{idx}")
 
         # Navigation Buttons
         col_prev, col_next = st.columns(2)
@@ -115,7 +115,7 @@ class JsonLabelingApp:
             )
         with col_next:
             st.button(
-                "➡️ Next",
+                "Next",
                 disabled=idx >= total - 1,
                 on_click=lambda: st.session_state.update(index=st.session_state.index + 1, expanded=False),
             )
@@ -150,11 +150,11 @@ class JsonLabelingApp:
 
     def display_save_section(self) -> None:
         """Provide Save and Download controls after labeling."""
-        if st.button("💾 Save Labels"):
+        if st.button("Save Labels"):
             for i, label in enumerate(st.session_state.labels):
                 self.data[i]["label"] = label
             st.session_state.saved = True
-            st.success("✅ Labels processed! You can now download the files below ⬇️")
+            st.success("Labels processed! You can now download the files below")
 
         if st.session_state.saved:
             self._render_download_buttons()
@@ -167,14 +167,14 @@ class JsonLabelingApp:
         colj, colc = st.columns(2)
         with colj:
             st.download_button(
-                "⬇️ Download JSON",
+                "Download JSON",
                 data=json_bytes,
                 file_name="labeled_output.json",
                 mime="application/json",
             )
         with colc:
             st.download_button(
-                "⬇️ Download CSV",
+                "Download CSV",
                 data=csv_bytes,
                 file_name="labeled_output.csv",
                 mime="text/csv",

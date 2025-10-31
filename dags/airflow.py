@@ -10,7 +10,7 @@ from src import (
     scrape_all_from_json_files,
     filter_articles,
     summarize_record,
-    store_in_weaviate
+    store_summary
 )
 
 default_args = {
@@ -67,25 +67,38 @@ with DAG(
 
 with DAG(
     dag_id="summarize_and_store_weaviate",
-    description="Summarize article content and store the summarized record into Weaviate.",
-    default_args=default_args,
     start_date=datetime(2024, 1, 1),
-    catchup=False,
-    tags=["summarization", "weaviate", "embedding", "originhub"],
+    schedule=None,
     params={
-        "article": {},
+        "scraped_data": {
+            "scraped_content": "This is scraped text...",
+            "scraped_metadata": {"author": "John Doe"},
+            "scraped_at": "2025-10-30T16:40:00Z",
+            "word_count": 1234,
+            "url": "https://example.com/article",
+            "title": "AI is Transforming the World"
+        }
     },
-) as summarize_and_store_dag:
+) as dag:
 
     summarize_task = PythonOperator(
         task_id="summarize_record",
         python_callable=summarize_record,
-        op_kwargs={"record": "{{ params.article }}"},
-    )  
+        op_kwargs={
+            "record": {
+                "scraped_content": "{{ params.scraped_data.scraped_content }}",
+                "scraped_metadata": "{{ params.scraped_data.scraped_metadata }}",
+                "scraped_at": "{{ params.scraped_data.scraped_at }}",
+                "word_count": "{{ params.scraped_data.word_count }}",
+                "url": "{{ params.scraped_data.url }}",
+                "title": "{{ params.scraped_data.title }}"
+            }
+        },
+    )
 
     store_task = PythonOperator(
         task_id="store_in_weaviate",
-        python_callable=store_in_weaviate,
+        python_callable=store_summary,
         op_kwargs={"record": summarize_task.output},
     )
 

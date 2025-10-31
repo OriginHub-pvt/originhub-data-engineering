@@ -1,13 +1,11 @@
 import os
 import logging
-import weaviate
-
 from dotenv import load_dotenv
+import weaviate
+from weaviate.classes.config import Configure
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-
-load_dotenv()
 
 if not logger.handlers:
     handler = logging.StreamHandler()
@@ -18,80 +16,123 @@ if not logger.handlers:
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
+load_dotenv()
 
-def get_client():
+WEAVIATE_HOST = os.getenv("WEAVIATE_HOST", "weaviate")
+WEAVIATE_PORT = int(os.getenv("WEAVIATE_PORT", 8080))
+WEAVIATE_GRPC_PORT = int(os.getenv("WEAVIATE_GRPC_PORT", 50051))
+WEAVIATE_MODEL = os.getenv("WEAVIATE_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+WEAVIATE_COLLECTION = os.getenv("WEAVIATE_COLLECTION", "ArticleSummary")
+
+logger.info(
+    f"Config loaded → host={WEAVIATE_HOST}, port={WEAVIATE_PORT}, grpc={WEAVIATE_GRPC_PORT}, "
+    f"model={WEAVIATE_MODEL}, collection={WEAVIATE_COLLECTION}"
+)
+
+try:
+    client = weaviate.connect_to_local(
+        host=WEAVIATE_HOST,
+        port=WEAVIATE_PORT,
+        grpc_port=WEAVIATE_GRPC_PORT,
+    )
+    logger.info("Connected to Weaviate successfully.")
+except Exception as e:
+    logger.error(f"Failed to connect to Weaviate: {e}")
+    raise
+
+def ensure_collection(name: str):
     """
-    Create and return a configured Weaviate client using environment variables.
+    Ensure a collection exists in Weaviate; create if missing.
     """
-    weaviate_url = os.getenv("WEAVIATE_URL", "http://localhost:8081")
-
-    logger.info(f"Connecting to Weaviate at {weaviate_url}")
-
     try:
-        client = weaviate.Client(url=weaviate_url)
-
-        if not client.is_ready():
-            logger.warning("Weaviate client created, but server not ready!")
+        existing = [c.name for c in client.collections.list_all()]
+        if name not in existing:
+            client.collections.create(
+                name=name,
+                vector_config=Configure.Vectors.text2vec_huggingface(model=WEAVIATE_MODEL),
+            )
+            logger.info(f"Created new collection '{name}' using model '{WEAVIATE_MODEL}'.")
         else:
-            logger.info("Connected to Weaviate successfully.")
-        return client
-
+            logger.debug(f"Collection '{name}' already exists.")
+        return client.collections.get(name)
     except Exception as e:
-        logger.error(f"Failed to connect to Weaviate: {e}")
+        logger.error(f"Failed to ensure collection '{name}': {e}")
+        raise
+
+def store_summary(record: dict) -> str:
+    """
+    Store a summarized article (title + summary) in Weaviate.
+    Automatically creates the collection if it doesn't exist.
+    """
+    try:
+        title = record.get("title", "Untitled")
+        summary = record.get("summary", "")
+
+        if not summary.strip():
+            logger.warning(f"Skipping record '{title}' — empty summary.")
+            return ""
+
+        # Ensure collection exists
+        collection = ensure_collection(WEAVIATE_COLLECTION)
+
+        # Insert record
+        uuid = collection.data.insert(properties={"title": title, "summary": summary})
+        logger.info(f"Stored summary for '{title}' (UUID: {uuid}) in '{WEAVIATE_COLLECTION}'.")
+        return str(uuid)
+    except Exception as e:
+        logger.error(f"Failed to store summary for '{record.get('title', 'Unknown')}': {e}")
         raise
 
 
-def ensure_schema(client):
+def fetch_summary(object_id: str):
     """
-    Ensure that the 'ArticleSummary' schema exists in Weaviate.
-    If not, create it with text2vec-transformers vectorizer.
+    Fetch and print stored article summary by object ID.
     """
-    class_name = "ArticleSummary"
-
     try:
-        if not client.schema.exists(class_name):
-            schema = {
-                "class": class_name,
-                "description": "Summarized RSS articles stored from OriginHub pipeline.",
-                "vectorizer": "text2vec-transformers",
-                "moduleConfig": {
-                    "text2vec-transformers": {
-                        "poolingStrategy": "masked_mean",
-                        "vectorizeClassName": False
-                    }
-                },
-                "properties": [
-                    {"name": "title", "dataType": ["text"]},
-                    {"name": "summary", "dataType": ["text"]},
-                ],
-            }
-            client.schema.create_class(schema)
-            logger.info("Created 'ArticleSummary' schema in Weaviate.")
+        collection = ensure_collection(WEAVIATE_COLLECTION)
+        obj = collection.query.fetch_object_by_id(object_id, include_vector=False)
+        if obj:
+            logger.info(f"Fetched from '{WEAVIATE_COLLECTION}': {obj.properties}")
+            return obj.properties
         else:
-            logger.debug("'ArticleSummary' schema already exists.")
+            logger.warning(f"No object found with ID {object_id}")
+            return None
     except Exception as e:
-        logger.error(f"Failed to ensure schema: {e}")
+        logger.error(f"Error fetching object {object_id}: {e}")
         raise
 
-def store_in_weaviate(record: dict):
+
+def delete_collection():
     """
-    Store summarized record in Weaviate with automatic vectorization.
-    Assumes Weaviate is running locally with text2vec-transformers.
+    Delete the configured collection from Weaviate.
     """
-    client = get_client()
-    ensure_schema(client)
-
-    title = record.get("title", "")
-    summary = record.get("summary", "")
-
-    data = {
-        "title": title,
-        "summary": summary,
-    }
-
     try:
-        client.data_object.create(data_object=data, class_name="ArticleSummary")
-        logger.info(f"Stored article in Weaviate: '{title or 'Untitled'}'")
+        client.collections.delete(WEAVIATE_COLLECTION)
+        logger.info(f"Deleted collection '{WEAVIATE_COLLECTION}'.")
     except Exception as e:
-        logger.error(f"Failed to store article '{title}': {e}")
-        raise
+        logger.error(f"Failed to delete collection '{WEAVIATE_COLLECTION}': {e}")
+
+
+if __name__ == "__main__":
+    try:
+        # Step 1: Auto-create collection
+        ensure_collection(WEAVIATE_COLLECTION)
+
+        # Step 2: Insert a sample record
+        sample = {
+            "title": "AI and the Future of Work",
+            "summary": "Artificial Intelligence is transforming the workforce by automating repetitive tasks."
+        }
+        obj_id = store_summary(sample)
+
+        # Step 3: Fetch to verify
+        if obj_id:
+            fetched = fetch_summary(obj_id)
+            print("\nRetrieved from Weaviate:", fetched)
+
+        # Step 4: Optional cleanup
+        # delete_collection()
+
+    finally:
+        client.close()
+        logger.info("Weaviate connection closed.")

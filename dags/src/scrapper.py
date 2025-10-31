@@ -336,7 +336,7 @@ def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
                 "scraped_at": scraped_data.get("fetched_at", ""),
                 "word_count": scraped_data.get("word_count", 0),
             }
-
+            logging.info({result})
         except requests.exceptions.RequestException as api_err:
             logging.error(f"API error while triggering {dag_id} for {url}: {api_err}")
             failed += 1
@@ -349,7 +349,7 @@ def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
             token = generate_JWT()
             response = requests.post(
                 api_endpoint,
-                json={"conf": {"article": result}},
+                json={"conf": {"scraped_data": result}},
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {token}"
@@ -379,8 +379,8 @@ def generate_JWT():
     }
 
     response = requests.post(endpoint_url, headers=headers, json=data)
-
-    return response.text.access_token
+    logging.info(f"Generated JWT token for Airflow API authentication. {json.loads(response.text)}")
+    return json.loads(response.text)["access_token"]
 
 if __name__ == "__main__":
     # Process all JSON files in filtered_data directory
@@ -403,7 +403,7 @@ if __name__ == "__main__":
         
         with open(output_file, "w", encoding="utf-8") as f:
             json.dump(scraped_data, f, indent=2, ensure_ascii=False)
-        print(f"\n✓ Scraped {len(results)} articles successfully")
-        print(f"✓ Results saved to '{output_file}'")
+        print(f"\nScraped {len(results)} articles successfully")
+        print(f"Results saved to '{output_file}'")
     else:
-        print("\n✗ No results to save")
+        print("\nNo results to save")
