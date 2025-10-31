@@ -9,7 +9,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
-from datetime import datetime, UTC
+from datetime import datetime, UTC, timezone
 
 import requests
 from bs4 import BeautifulSoup
@@ -347,9 +347,11 @@ def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
             logging.info("Finally block reached.")
             # --- Step 3: Trigger summarization DAG via REST API ---
             token = generate_JWT()
+            logical_date = datetime.now(timezone.utc).isoformat()
             response = requests.post(
                 api_endpoint,
-                json={"conf": {"scraped_data": result}},
+                json={"logical_date": logical_date,
+                      "conf": {"scraped_data": result}},
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {token}"

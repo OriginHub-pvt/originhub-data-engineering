@@ -45,7 +45,7 @@ def ensure_collection(name: str):
     Ensure a collection exists in Weaviate; create if missing.
     """
     try:
-        existing = [c.name for c in client.collections.list_all()]
+        existing = client.collections.list_all()
         if name not in existing:
             client.collections.create(
                 name=name,
@@ -72,17 +72,14 @@ def store_summary(record: dict) -> str:
             logger.warning(f"Skipping record '{title}' — empty summary.")
             return ""
 
-        # Ensure collection exists
         collection = ensure_collection(WEAVIATE_COLLECTION)
 
-        # Insert record
         uuid = collection.data.insert(properties={"title": title, "summary": summary})
         logger.info(f"Stored summary for '{title}' (UUID: {uuid}) in '{WEAVIATE_COLLECTION}'.")
         return str(uuid)
     except Exception as e:
         logger.error(f"Failed to store summary for '{record.get('title', 'Unknown')}': {e}")
         raise
-
 
 def fetch_summary(object_id: str):
     """
