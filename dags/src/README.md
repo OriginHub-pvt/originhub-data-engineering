@@ -23,7 +23,7 @@ Central import surface that keeps the DAG definition clean. It re-exports:
 - `normalize_feeds_to_gcs`, `normalize_latest_feeds` from `xml_to_json.py`
 - `filter_articles` from `filter_articles.py`
 - `WebScraper`, `scrape_url`, `scrape_web_content`, `scrape_all_from_json_files` from `scrapper.py`
-- `summarize_record`, `serialize_json` from `summarize_functions.py`
+- `summarize_record` from `summarize_functions.py`
 - `store_in_weaviate` from `weaviate_store.py`
 
 This allows `dags/airflow.py` (and future DAGs) to simply `from src import ...` without juggling multiple module paths.

@@ -13,5 +13,9 @@ docker compose build
 # Create required Airflow directories
 mkdir -p ./logs ./plugins ./config
 
+# Write the current user's UID into .env
+[ -f .env ] || touch .env
+grep -q '^AIRFLOW_UID=' .env || echo "AIRFLOW_UID=$(id -u)" >> .env
+
 # Start all services
 docker compose up -d
