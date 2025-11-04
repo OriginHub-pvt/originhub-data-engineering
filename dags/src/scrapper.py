@@ -100,6 +100,9 @@ class WebScraper:
         except requests.exceptions.RequestException as e:
             logging.error(f"Failed to fetch URL {url}: {e}")
             raise
+        except Exception as e:
+            logging.error(f"An unexpected error occurred while fetching {url}: {e}")
+            raise
     
     def parse_html(self, html_content: str) -> BeautifulSoup:
         """
@@ -338,7 +341,6 @@ def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
             # --- Step 1: Scrape the URL content ---
             logging.info(f"Scraping [{idx}/{total_feeds}]: {url}")
             scraped_data = scraper.scrape_full(url)
-
             # --- Step 2: Merge scraped data with original feed metadata ---
             result = {
                 "url": url,
@@ -348,7 +350,6 @@ def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
                 "scraped_at": scraped_data.get("fetched_at", ""),
                 "word_count": scraped_data.get("word_count", 0),
             }
-            logging.info({result})
         except Exception as e:
             logging.error(f"✗ Failed to scrape or trigger for {url}: {e}")
             failed += 1
@@ -368,8 +369,10 @@ def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
             result = sanitize_payload(result)
             response = requests.post(
                 api_endpoint,
-                json={"logical_date": logical_date,
-                      "conf": {"scraped_data": result}},
+                json={
+                    "logical_date": logical_date,
+                    "conf": {"scraped_data": result}
+                },
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {token}"
