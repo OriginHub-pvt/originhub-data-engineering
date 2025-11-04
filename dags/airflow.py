@@ -1,4 +1,3 @@
-from __future__ import annotations
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.providers.standard.operators.python import PythonOperator
@@ -107,4 +106,3 @@ with DAG(
 
 if __name__ == "__main__":
     dag.test()
-    

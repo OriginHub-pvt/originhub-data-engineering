@@ -8,7 +8,6 @@ import json
 import logging
 import os
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
 from datetime import datetime, UTC, timezone
 
 import requests
