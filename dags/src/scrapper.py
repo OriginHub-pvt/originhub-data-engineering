@@ -341,6 +341,7 @@ def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
             # --- Step 1: Scrape the URL content ---
             logging.info(f"Scraping [{idx}/{total_feeds}]: {url}")
             scraped_data = scraper.scrape_full(url)
+
             # --- Step 2: Merge scraped data with original feed metadata ---
             result = {
                 "url": url,
