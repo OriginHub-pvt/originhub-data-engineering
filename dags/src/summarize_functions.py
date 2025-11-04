@@ -39,7 +39,7 @@ def summarize_record(record: Dict[str, Any]) -> Dict[str, Any]:
         if _summarizer is None:
             try:
                 logging.info(f"Initializing summarizer with model: {MODEL_NAME}")
-                _summarizer = pipeline("summarization", model=MODEL_NAME)
+                _summarizer = pipeline("summarization", model=MODEL_NAME, device=0)
             except Exception as e:
                 logging.exception(f"Failed to initialize summarization model: {e}")
                 return {"title": title, "summary": "", "error": f"Model init failed: {str(e)}"}

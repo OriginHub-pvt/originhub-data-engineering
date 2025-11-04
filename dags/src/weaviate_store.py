@@ -24,18 +24,12 @@ WEAVIATE_GRPC_PORT = int(os.getenv("WEAVIATE_GRPC_PORT", 50051))
 WEAVIATE_MODEL = os.getenv("WEAVIATE_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 WEAVIATE_COLLECTION = os.getenv("WEAVIATE_COLLECTION", "ArticleSummary")
 
-logger.info(
-    f"Config loaded → host={WEAVIATE_HOST}, port={WEAVIATE_PORT}, grpc={WEAVIATE_GRPC_PORT}, "
-    f"model={WEAVIATE_MODEL}, collection={WEAVIATE_COLLECTION}"
-)
-
 try:
     client = weaviate.connect_to_local(
         host=WEAVIATE_HOST,
         port=WEAVIATE_PORT,
         grpc_port=WEAVIATE_GRPC_PORT,
     )
-    logger.info("Connected to Weaviate successfully.")
 except Exception as e:
     logger.error(f"Failed to connect to Weaviate: {e}")
     raise

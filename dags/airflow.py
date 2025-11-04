@@ -68,6 +68,7 @@ with DAG(
 with DAG(
     dag_id="summarize_and_store_weaviate",
     start_date=datetime(2024, 1, 1),
+    max_active_runs=1,
     schedule=None,
     params={
         "scraped_data": {

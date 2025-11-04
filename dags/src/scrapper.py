@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from datetime import datetime, UTC, timezone
 
 import requests
+import re
 from bs4 import BeautifulSoup
 
 logging.basicConfig(level=logging.INFO)
@@ -24,6 +25,18 @@ api_endpoint = f"{airflow_base_url}/api/v2/dags/{dag_id}/dagRuns"
 # Optional authentication (if Airflow UI login is enabled)
 airflow_user = os.getenv("AIRFLOW_USERNAME", "airflow")
 airflow_password = os.getenv("AIRFLOW_PASSWORD", "airflow")
+
+def sanitize_payload(data):
+    """Recursively remove null bytes and invalid unicode from strings."""
+    if isinstance(data, dict):
+        return {k: sanitize_payload(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [sanitize_payload(v) for v in data]
+    elif isinstance(data, str):
+        # Remove null bytes and other non-printable chars
+        return re.sub(r"[\x00-\x1F\x7F]", "", data)
+    else:
+        return data
 
 class WebScraper:
     """
@@ -74,7 +87,7 @@ class WebScraper:
                 "content_length": len(response.content),
                 "content_type": response.headers.get('Content-Type', ''),
                 "fetched_at": fetched_at.isoformat(),
-                "headers": dict(response.headers)
+                # "headers": dict(response.headers)
             }
             
         except requests.exceptions.SSLError as e:
@@ -321,8 +334,6 @@ def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
             failed += 1
             continue
 
-        result={**item}
-
         try:
             # --- Step 1: Scrape the URL content ---
             logging.info(f"Scraping [{idx}/{total_feeds}]: {url}")
@@ -330,24 +341,31 @@ def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
 
             # --- Step 2: Merge scraped data with original feed metadata ---
             result = {
-                **item,
+                "url": url,
+                "title": title,
                 "scraped_content": scraped_data.get("text_content", ""),
                 "scraped_metadata": scraped_data.get("metadata", {}),
                 "scraped_at": scraped_data.get("fetched_at", ""),
                 "word_count": scraped_data.get("word_count", 0),
             }
             logging.info({result})
-        except requests.exceptions.RequestException as api_err:
-            logging.error(f"API error while triggering {dag_id} for {url}: {api_err}")
-            failed += 1
         except Exception as e:
             logging.error(f"✗ Failed to scrape or trigger for {url}: {e}")
             failed += 1
+            result = {
+                "url": url,
+                "title": title,
+                "scraped_content": item.get("description", ""),
+                "scraped_metadata": {},
+                "scraped_at": "",
+                "word_count": 0
+            }
         finally:
             logging.info("Finally block reached.")
             # --- Step 3: Trigger summarization DAG via REST API ---
             token = generate_JWT()
             logical_date = datetime.now(timezone.utc).isoformat()
+            result = sanitize_payload(result)
             response = requests.post(
                 api_endpoint,
                 json={"logical_date": logical_date,
