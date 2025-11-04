@@ -23,7 +23,7 @@ def insert_article(collection_name: str, article_data: dict) -> str:
     return str(uuid)
 
 # Connect to Weaviate
-client = weaviate.connect_to_local(
+client = weaviate.connect_to_local( 
     host="localhost",
     port=8081,
     grpc_port=50051

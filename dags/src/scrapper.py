@@ -8,14 +8,34 @@ import json
 import logging
 import os
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
-from datetime import datetime, UTC
+from datetime import datetime, UTC, timezone
 
 import requests
+import re
 from bs4 import BeautifulSoup
 
 logging.basicConfig(level=logging.INFO)
 
+# Airflow API base URL (for local Airflow instance)
+airflow_base_url = os.getenv("AIRFLOW_API_BASE_URL", "http://localhost:8080")
+dag_id = "summarize_and_store_weaviate"
+api_endpoint = f"{airflow_base_url}/api/v2/dags/{dag_id}/dagRuns"
+
+# Optional authentication (if Airflow UI login is enabled)
+airflow_user = os.getenv("AIRFLOW_USERNAME", "airflow")
+airflow_password = os.getenv("AIRFLOW_PASSWORD", "airflow")
+
+def sanitize_payload(data):
+    """Recursively remove null bytes and invalid unicode from strings."""
+    if isinstance(data, dict):
+        return {k: sanitize_payload(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [sanitize_payload(v) for v in data]
+    elif isinstance(data, str):
+        # Remove null bytes and other non-printable chars
+        return re.sub(r"[\x00-\x1F\x7F]", "", data)
+    else:
+        return data
 
 class WebScraper:
     """
@@ -66,7 +86,7 @@ class WebScraper:
                 "content_length": len(response.content),
                 "content_type": response.headers.get('Content-Type', ''),
                 "fetched_at": fetched_at.isoformat(),
-                "headers": dict(response.headers)
+                # "headers": dict(response.headers)
             }
             
         except requests.exceptions.SSLError as e:
@@ -78,6 +98,9 @@ class WebScraper:
             
         except requests.exceptions.RequestException as e:
             logging.error(f"Failed to fetch URL {url}: {e}")
+            raise
+        except Exception as e:
+            logging.error(f"An unexpected error occurred while fetching {url}: {e}")
             raise
     
     def parse_html(self, html_content: str) -> BeautifulSoup:
@@ -282,110 +305,105 @@ def scrape_web_content(**context: Any) -> Dict[str, Any]:
     return result
 
 
-def scrape_all_from_json_files(json_dir: str = "dags/filtered_data") -> List[Dict[str, Any]]:
+def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
     """
-    Scrape all URLs from JSON files in the specified directory.
-    
+    Scrape all URLs from filtered JSON feed items and automatically trigger summarization DAGs
+    using the Airflow REST API (works for Airflow 3.x hosted on localhost:8080).
+
     Args:
-        json_dir: Directory containing JSON files with feed data
-        
+        context: Airflow task context, containing XCom or upstream task outputs
+
     Returns:
-        List of scraped results, each containing original metadata and scraped content
+        Dictionary containing basic summary metrics (triggered and failed counts)
     """
     scraper = WebScraper()
-    all_results = []
-    
-    # Get all JSON files from the directory
-    if not os.path.exists(json_dir):
-        logging.error(f"Directory {json_dir} does not exist")
-        return []
-    
-    json_files = [f for f in os.listdir(json_dir) if f.endswith('.json')]
-    
-    if not json_files:
-        logging.warning(f"No JSON files found in {json_dir}")
-        return []
-    
-    logging.info(f"Found {len(json_files)} JSON files to process")
-    
-    for json_file in json_files:
-        json_path = os.path.join(json_dir, json_file)
-        logging.info(f"Processing file: {json_file}")
-        
-        try:
-            with open(json_path, 'r', encoding='utf-8') as f:
-                feed_items = json.load(f)
-            
-            if not isinstance(feed_items, list):
-                logging.warning(f"{json_file} does not contain a list, skipping")
-                continue
-            
-            logging.info(f"Found {len(feed_items)} URLs in {json_file}")
-            
-            for idx, item in enumerate(feed_items, 1):
-                url = item.get('url')
-                
-                if not url:
-                    logging.warning(f"No URL found in item {idx} of {json_file}, skipping")
-                    continue
-                
-                try:
-                    logging.info(f"Scraping [{idx}/{len(feed_items)}]: {url}")
-                    
-                    # Scrape the URL
-                    scraped_data = scraper.scrape_full(url)
-                    
-                    # Combine original metadata with scraped content
-                    result = {
-                        **item,  # Original metadata (title, url, description, dates)
-                        "scraped_content": scraped_data.get("text_content", ""),
-                        "scraped_metadata": scraped_data.get("metadata", {}),
-                        "scraped_at": scraped_data.get("fetched_at", ""),
-                        "word_count": scraped_data.get("word_count", 0)
-                    }
-                    
-                    all_results.append(result)
-                    logging.info(f"✓ Successfully scraped: {item.get('title', url)}")
-                    
-                except Exception as e:
-                    logging.error(f"✗ Failed to scrape {url}: {e}")
-                    # Use description as fallback content when scraping fails
-                    error_result = {
-                        **item,
-                        "scraped_content": item.get("description", ""),
-                        "scrap_error": str(e),
-                        "scraped_at": datetime.now(UTC).isoformat()
-                    }
-                    all_results.append(error_result)
-        
-        except Exception as e:
-            logging.error(f"Error reading {json_file}: {e}")
-            continue
-    
-    logging.info(f"Completed scraping. Total results: {len(all_results)}")
-    
-    # Save results to scraped_data directory
-    if all_results:
-        # Create scraped_data directory if it doesn't exist
-        output_dir = "dags/scraped_data"
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Save title and scraped_content from each result
-        output_file = os.path.join(output_dir, "scraped_data.json")
-        scraped_data = [
-            {
-                "title": result.get("title", ""),
-                "scraped_content": result.get("scraped_content", "")
-            }
-            for result in all_results
-        ]
-        
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(scraped_data, f, indent=2, ensure_ascii=False)
-        logging.info(f"Results saved to '{output_file}'")
-    
-    return all_results
 
+    # Retrieve feed items from upstream task (filter_articles)
+    feed_items = context.get("payload") or context["ti"].xcom_pull(task_ids="filter_articles")
+    total_feeds = len(feed_items) if feed_items else 0
+
+    logging.info(f"Found {total_feeds} feeds to scrape and summarize.")
+
+    triggered = 0
+    failed = 0
+
+    for idx, item in enumerate(feed_items or [], 1):
+        url = item.get("url")
+        title = item.get("title", f"Article {idx}")
+
+        if not url:
+            logging.warning(f"[{idx}/{total_feeds}] Skipping item with no URL ({title}).")
+            failed += 1
+            continue
+
+        try:
+            # --- Step 1: Scrape the URL content ---
+            logging.info(f"Scraping [{idx}/{total_feeds}]: {url}")
+            scraped_data = scraper.scrape_full(url)
+
+            # --- Step 2: Merge scraped data with original feed metadata ---
+            result = {
+                "url": url,
+                "title": title,
+                "scraped_content": scraped_data.get("text_content", ""),
+                "scraped_metadata": scraped_data.get("metadata", {}),
+                "scraped_at": scraped_data.get("fetched_at", ""),
+                "word_count": scraped_data.get("word_count", 0),
+            }
+        except Exception as e:
+            logging.error(f"✗ Failed to scrape or trigger for {url}: {e}")
+            failed += 1
+            result = {
+                "url": url,
+                "title": title,
+                "scraped_content": item.get("description", ""),
+                "scraped_metadata": {},
+                "scraped_at": "",
+                "word_count": 0
+            }
+        finally:
+            logging.info("Finally block reached.")
+            # --- Step 3: Trigger summarization DAG via REST API ---
+            token = generate_JWT()
+            logical_date = datetime.now(timezone.utc).isoformat()
+            result = sanitize_payload(result)
+            response = requests.post(
+                api_endpoint,
+                json={
+                    "logical_date": logical_date,
+                    "conf": {"scraped_data": result}
+                },
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {token}"
+                },
+            )
+            response.raise_for_status()
+
+            logging.info(f"Triggered {dag_id} for '{title}' successfully")
+            triggered += 1
+
+    logging.info(f"Completed scraping: {triggered} triggered, {failed} failed.")
+    return {"triggered": triggered, "failed": failed}
+
+def generate_JWT():
+    """
+    Generate a JWT token for Airflow API authentication.
+    Returns:
+        A JWT token string
+    """
+    endpoint_url = f"{airflow_base_url}/auth/token"
+    headers = {
+        "Content-Type": "application/json"
+    }
+    data = {
+        "username": airflow_user,
+        "password": airflow_password
+    }
+
+    response = requests.post(endpoint_url, headers=headers, json=data)
+    logging.info(f"Generated JWT token for Airflow API authentication. {json.loads(response.text)}")
+    return json.loads(response.text)["access_token"]
 
 if __name__ == "__main__":
     # Process all JSON files in filtered_data directory
@@ -408,7 +426,7 @@ if __name__ == "__main__":
         
         with open(output_file, "w", encoding="utf-8") as f:
             json.dump(scraped_data, f, indent=2, ensure_ascii=False)
-        print(f"\n✓ Scraped {len(results)} articles successfully")
-        print(f"✓ Results saved to '{output_file}'")
+        print(f"\nScraped {len(results)} articles successfully")
+        print(f"Results saved to '{output_file}'")
     else:
-        print("\n✗ No results to save")
+        print("\nNo results to save")

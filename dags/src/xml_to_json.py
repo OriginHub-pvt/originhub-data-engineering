@@ -218,6 +218,7 @@ def normalize_feeds_to_gcs(
 
     hook = GCSHook(gcp_conn_id=gcp_conn_id)
     saved: List[str] = []
+    return_obj = []
 
     for feed in feeds:
         rss_url = feed["rss_url"]
@@ -240,6 +241,8 @@ def normalize_feeds_to_gcs(
             "item_count": len(deduped),
             "items": deduped,
         }
+        
+        return_obj.extend(deduped)
 
         filename = _build_filename(rss_url, fetched_at, extension="json")
         object_name = f"{prefix}{filename}" if prefix else filename
@@ -254,7 +257,7 @@ def normalize_feeds_to_gcs(
         saved.append(f"gs://{JSON_BUCKET_NAME}/{object_name}")
 
     logging.info("Normalized %d feeds to JSON GCS objects", len(saved))
-    return saved
+    return {"item_count": len(return_obj), "items": return_obj}
 
 
 def normalize_latest_feeds(**context) -> List[str]:

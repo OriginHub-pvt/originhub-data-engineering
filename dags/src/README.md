@@ -1,0 +1,204 @@
+## DAGS/src Module Reference
+
+This directory owns every helper that powers the two cooperating Airflow DAGs. The ingestion DAG fetches RSS feeds, stores the raw XML, normalizes entries, filters them with an ML model, and scrapes the surviving URLs. Each scraped article then triggers a second DAG that summarizes the content and stores it in Weaviate.
+
+```
+fetch_rss_feeds ─┬─> store_rss_feeds
+                  └─> normalize_feeds ──> filter_articles ──> scrape_web_content
+                                                           │
+                                                           ▼
+                                              summarize_and_store_weaviate DAG
+                                              └─> summarize_record ──> store_in_weaviate
+```
+
+Every file in `dags/src/` participates in that flow. The sections below document each module in detail, explaining what it exports, which environment variables it reads, and how it contributes to the DAG.
+
+---
+
+### `__init__.py`
+
+Central import surface that keeps the DAG definition clean. It re-exports:
+
+- `fetch_rss_feeds`, `store_rss_feeds` from `fetch_store_rss.py`
+- `normalize_feeds_to_gcs`, `normalize_latest_feeds` from `xml_to_json.py`
+- `filter_articles` from `filter_articles.py`
+- `WebScraper`, `scrape_url`, `scrape_web_content`, `scrape_all_from_json_files` from `scrapper.py`
+- `summarize_record` from `summarize_functions.py`
+- `store_in_weaviate` from `weaviate_store.py`
+
+This allows `dags/airflow.py` (and future DAGs) to simply `from src import ...` without juggling multiple module paths.
+
+---
+
+### `fetch_store_rss.py`
+
+Purpose: Fetch RSS/Atom feeds and persist the raw XML to Google Cloud Storage.
+
+Key pieces:
+
+| Symbol | Description |
+| --- | --- |
+| `_normalize_urls`, `_slug_from_url`, `_build_filename` | Utility helpers for cleaning URLs and generating timestamped slugs such as `20251028032530_example.com_feed.xml`. |
+| `_extract_config` | Reads feed URLs and request timeout from DAG params or `dag_run.conf`. |
+| `fetch_rss_feeds` | Airflow task function. Performs HTTP GET for every feed URL, raises on failure, and returns `{"feeds": [{"rss_url", "content", "fetched_at"}, …]}` for downstream tasks. |
+| `store_rss_feeds` | Airflow task function. Uploads each raw XML payload to `XML_BUCKET_NAME` using `airflow.providers.google.cloud.hooks.gcs.GCSHook`. Returns the list of `gs://…` URIs pushed to the bucket. |
+
+Environment variables:
+
+- `XML_BUCKET_NAME` (required) — GCS bucket for raw XML.
+- `DEFAULT_TIMEOUT` (implicit 30 seconds) — can be overridden via DAG params.
+
+Contribution to the DAG:
+
+- `fetch_rss_feeds` is the first node in the pipeline.
+- The output fans out in parallel to `store_rss_feeds` (archival) and `normalize_feeds_to_gcs` (parsing).
+
+---
+
+### `xml_to_json.py`
+
+Purpose: Turn the raw XML content into a canonical JSON structure and publish it to GCS. Also provides local utilities for reprocessing feeds on disk.
+
+Key pieces:
+
+| Symbol | Description |
+| --- | --- |
+| `_strip_html`, `_first_url_from_links`, `_best_url`, `_best_created`, `_best_updated`, `_coalesce_description`, `normalize_entry` | Clean up feed entries, strip HTML, choose canonical URLs, and normalize timestamps (ISO-8601 UTC). |
+| `parse_xml_content`, `parse_xml_file` | Use `feedparser` to decode RSS/Atom XML into Python dictionaries. |
+| `dedupe_by_url` | Prevent duplicate entries (falls back to title + createdDate when the URL is missing). |
+| `normalize_feeds_to_gcs` | Airflow task function. Parses each XML string from the `fetch_rss_feeds` payload, dedupes entries, and uploads JSON to `JSON_BUCKET_NAME`. Returns a list of `gs://…` URIs. |
+| `normalize_all_feeds`, `normalize_latest_feeds` | Local/CLI helpers that operate on files in `./dags/rss_data/` and generate `.normalized.json` files for quick reprocessing or tests. |
+
+Environment variables:
+
+- `JSON_BUCKET_NAME` (required) — GCS bucket for normalized JSON feeds.
+
+Contribution to the DAG:
+
+- `normalize_feeds_to_gcs` sits on the second branch of the fan-out. Its output feeds the ML classifier (`filter_articles`) and keeps a high-quality history of normalized feeds in GCS.
+- `normalize_latest_feeds` is still available for the unit tests and ad-hoc command-line runs.
+
+---
+
+### `filter_articles.py`
+
+Purpose: Apply a transformer-based classifier to normalized feed items so that only relevant articles go through expensive scraping/summarization.
+
+Key pieces:
+
+| Symbol | Description |
+| --- | --- |
+| `load_model_from_gcs` | Downloads tokenizer/model weights from `gs://<MODEL_BUCKET>/<MODEL_NAME>/v<MODEL_VERSION>/` via `GCSHook`, caches under `/tmp`, and loads them with `transformers.AutoModelForSequenceClassification`. |
+| `predict_relevance` | Concatenates `title` and `description`, tokenizes, and runs inference with `torch`. Keeps only entries where the predicted label is 1. |
+| `filter_articles` | Airflow task function. Accepts either the dict payload from `normalize_feeds_to_gcs` (`{"items": [...]}`) or a raw list, loads the model, and returns the filtered list for the next node. |
+
+Environment variables:
+
+- `MODEL_BUCKET` (default `origin-hub_model-weights`)
+- `MODEL_NAME` (default `slm_filter`)
+- `MODEL_VERSION` (default `1`)
+- `LOG_LEVEL`
+
+Contribution to the DAG:
+
+- Runs immediately after `normalize_feeds`, trimming the dataset to articles worth scraping and summarizing. The next task receives a much smaller, higher-quality list.
+
+Dependencies:
+
+- `torch`, `transformers`, `airflow.providers.google.cloud.hooks.gcs.GCSHook`
+
+---
+
+### `scrapper.py`
+
+Purpose: Retrieve full web pages for each filtered article, extract metadata/text/links/images, and trigger the summarization DAG for every successfully scraped record. Also supports bulk/offline scraping from JSON files.
+
+Key pieces:
+
+| Symbol | Description |
+| --- | --- |
+| `WebScraper` | Class that handles HTTP requests (with SSL retry), HTML parsing via `BeautifulSoup`, metadata extraction, text cleaning, link/image resolution, and word counts. |
+| `scrape_url` | Convenience wrapper to scrape a single URL with a fresh `WebScraper` instance. |
+| `scrape_web_content` | Airflow task function used for single-URL scraping (manual/ad-hoc runs). Returns the scraped payload to the caller. |
+| `scrape_all_from_json_files` | Production task used by the ingestion DAG. Iterates over filtered feed items, scrapes each URL, builds an enriched record, and uses the Airflow local client to trigger the `summarize_and_store_weaviate` DAG (one trigger per article). Returns aggregate metrics (`triggered` / `failed`). |
+
+Contribution to the DAG:
+
+- `scrape_web_content` remains available for manual or ad-hoc scraping flows (e.g., debugging a single URL).
+- `scrape_all_from_json_files` is the production task that processes the filtered feed list and triggers the summarization DAG per article.
+
+Implementation notes:
+
+- Uses a desktop-style User-Agent to avoid trivial blocking.
+- Removes scripts/styles before text extraction to reduce noise.
+- Resolves relative URLs for links and images.
+- Handles per-item errors by logging, tracking failures, and continuing without blocking subsequent items.
+- Avoids returning bulky payloads; instead it triggers the summarization DAG so data is passed via `dag_run.conf` rather than XCom.
+
+---
+
+### `summarize_functions.py`
+
+Purpose: Provide reusable utilities for summarizing scraped articles and serializing the results before they are pushed to storage (e.g., a VDB).
+
+Key pieces:
+
+| Symbol | Description |
+| --- | --- |
+| `summarizer = pipeline("summarization", model="google/pegasus-cnn_dailymail")` | Pre-loaded Hugging Face summarization pipeline. |
+| `summarize_record(record)` | Accepts a dict containing scraped article metadata (`scraped_content`, `title`, etc.), chunks long text (1,000 characters by default), runs the summarizer on each chunk, stitches the results into a `summary` field, and returns the enriched record. |
+| `serialize_json(data)` | Takes a list of dictionaries and converts it into a `BytesIO` object containing pretty-printed JSON—convenient for uploading to GCS or S3 directly. |
+
+Contribution to the DAG:
+
+- Serves as the first task in the `summarize_and_store_weaviate` DAG. Each trigger from `scrape_all_from_json_files` passes an article payload, which `summarize_record` enriches with an abstractive summary before handing it to the storage task.
+
+Dependencies:
+
+- `transformers`
+
+---
+
+### `weaviate_store.py`
+
+Purpose: Manage connectivity with Weaviate and persist summarized articles.
+
+Key pieces:
+
+| Symbol | Description |
+| --- | --- |
+| `get_client` | Builds a Weaviate client using `WEAVIATE_URL` and logs readiness status. |
+| `ensure_schema` | Creates the `ArticleSummary` schema (text2vec-transformers) if it does not already exist. |
+| `store_in_weaviate` | Airflow task function invoked by the summarization DAG. Writes the `title` and `summary` of each article into Weaviate. |
+
+Environment variables:
+
+- `WEAVIATE_URL` (default `http://localhost:8081`)
+
+Contribution to the DAG:
+
+- Acts as the terminal task of `summarize_and_store_weaviate`, ensuring summaries are persisted in the vector database for semantic retrieval.
+
+Dependencies:
+
+- `weaviate`, `dotenv`
+
+---
+
+### `README.md` (this document)
+
+- The canonical reference for everything living in `dags/src`. Update it whenever new helper modules or Airflow tasks are added so the DAG’s responsibilities remain transparent.
+
+---
+
+### Putting It All Together
+
+1. `fetch_rss_feeds` downloads RSS/Atom feeds; the payload flows to both archival and parsing branches.
+2. `store_rss_feeds` uploads raw XML files to `gs://<XML_BUCKET_NAME>/…`, preserving an unmodified record of the feed.
+3. `normalize_feeds_to_gcs` converts the same payload to tidy JSON and writes it to `gs://<JSON_BUCKET_NAME>/…`.
+4. `filter_articles` loads the ML classifier from GCS, filters the normalized entries, and pushes only relevant articles forward.
+5. `scrape_all_from_json_files` fetches the full HTML for each remaining article, assembles an enriched payload, and triggers the `summarize_and_store_weaviate` DAG once per article.
+6. `summarize_record` (DAG #2) generates abstractive summaries from the scraped text.
+7. `store_in_weaviate` persists the summarized payload into the `ArticleSummary` class inside Weaviate.
+
+This modular design keeps network I/O, parsing, ML inference, scraping, summarization, and storage concerns isolated while still composing into a seamless multi-DAG pipeline. When you add new functionality, implement the helper here, expose it via `__init__.py`, and reference it from the relevant DAG.
