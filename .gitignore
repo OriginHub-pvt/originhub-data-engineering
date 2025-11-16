@@ -9,3 +9,4 @@ dags/filtered_data
 *.DS_Store
 *.venv
 volumes
+venv*
