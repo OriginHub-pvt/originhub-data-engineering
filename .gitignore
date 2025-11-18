@@ -10,3 +10,4 @@ dags/filtered_data
 *.venv
 volumes
 venv*
+*.json

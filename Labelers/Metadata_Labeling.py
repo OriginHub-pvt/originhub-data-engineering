@@ -3,7 +3,7 @@ import json
 import pandas as pd
 
 
-class MetadataApp:
+class BiasLabelingApp:
 
     def __init__(self):
         st.set_page_config(page_title="Metadata Completion App", layout="wide")
@@ -59,16 +59,16 @@ class MetadataApp:
 
         # Auto-fill but still editable by user later
         length_bucket = (
-            "short" if len(desc) < 150 else
-            "medium" if len(desc) < 400 else
+            "short" if len(desc) <= 300 else
+            "medium" if len(desc) <= 800 else
             "long"
         )
 
         return {
             "ai_group": "Unknown",
-            "source_type": "Unknown",
+            "source_type": "Other",
             "region": "Unknown",
-            "article_type": "Unknown",
+            "article_type": "Other",
             "org_type": "Unknown",
             "length_bucket": length_bucket
         }
@@ -125,8 +125,8 @@ class MetadataApp:
 
             meta["region"] = st.selectbox(
                 "Region",
-                ["US", "Europe", "India", "SEA", "LatAm", "Other", "Unknown"],
-                index=["US", "Europe", "India", "SEA", "LatAm", "Other", "Unknown"].index(meta["region"])
+                ["US", "Europe", "India", "SEA", "LatAm", "Unknown"],
+                index=["US", "Europe", "India", "SEA", "LatAm", "Unknown"].index(meta["region"])
             )
 
             meta["org_type"] = st.selectbox(
@@ -138,19 +138,18 @@ class MetadataApp:
         with col2:
             meta["source_type"] = st.selectbox(
                 "Source Type",
-                ["Major media", "Blog", "Corporate PR", "Other", "Unknown"],
-                index=["Major media", "Blog", "Corporate PR", "Other", "Unknown"].index(meta["source_type"])
+                ["Major media", "Blog", "Corporate PR", "Other"],
+                index=["Major media", "Blog", "Corporate PR", "Other"].index(meta["source_type"])
             )
 
             meta["article_type"] = st.selectbox(
                 "Article Type",
                 ["Listicle", "Launch/Announcement", "How-to/Tutorial", "Opinion",
-                 "Analysis/Deep dive", "Other", "Unknown"],
+                "Analysis/Deep dive", "Other"],
                 index=["Listicle", "Launch/Announcement", "How-to/Tutorial", "Opinion",
-                       "Analysis/Deep dive", "Other", "Unknown"].index(meta["article_type"])
+                    "Analysis/Deep dive", "Other"].index(meta["article_type"])
             )
 
-            # ⭐ NEW: Length bucket as dropdown
             meta["length_bucket"] = st.selectbox(
                 "Length Bucket",
                 ["short", "medium", "long"],
@@ -170,11 +169,11 @@ class MetadataApp:
 
         with col_prev:
             st.button("⬅️ Previous", disabled=idx == 0,
-                      on_click=lambda: st.session_state.update(index=idx - 1, expanded=False))
+                    on_click=lambda: st.session_state.update(index=idx - 1, expanded=False))
 
         with col_next:
             st.button("Next ➡️", disabled=idx >= total - 1,
-                      on_click=lambda: st.session_state.update(index=idx + 1, expanded=False))
+                    on_click=lambda: st.session_state.update(index=idx + 1, expanded=False))
 
     # -----------------------------------------------------
     # Progress
@@ -182,9 +181,9 @@ class MetadataApp:
     def display_progress(self):
         filled = sum(
             m["ai_group"] != "Unknown" or
-            m["source_type"] != "Unknown" or
+            m["source_type"] != "Other" or
             m["region"] != "Unknown" or
-            m["article_type"] != "Unknown" or
+            m["article_type"] != "Other" or
             m["org_type"] != "Unknown"
             for m in st.session_state.meta
         )
@@ -222,4 +221,4 @@ class MetadataApp:
 
 
 if __name__ == "__main__":
-    MetadataApp()
+    BiasLabelingApp()
