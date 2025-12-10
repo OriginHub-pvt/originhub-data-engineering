@@ -23,18 +23,38 @@ WEAVIATE_PORT = int(os.getenv("WEAVIATE_PORT", 8080))
 WEAVIATE_GRPC_PORT = int(os.getenv("WEAVIATE_GRPC_PORT", 50051))
 WEAVIATE_MODEL = os.getenv("WEAVIATE_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 WEAVIATE_COLLECTION = os.getenv("WEAVIATE_COLLECTION", "ArticleSummary")
+WEAVIATE_GRPC_HOST=os.getenv("WEAVIATE_GRPC_HOST", "weaviate")
 
-try:
-    client = weaviate.connect_to_local(
-        host=WEAVIATE_HOST,
-        port=WEAVIATE_PORT,
+
+    
+
+def get_weaviate_client():
+    """
+    Create and return a Weaviate client using HTTP.
+    No connection is made until runtime (inside a task).
+    """
+    try:
+        # client = weaviate.connect_to_local(
+        #     host=WEAVIATE_HOST,
+        #     port=WEAVIATE_PORT,
+        #     grpc_port=WEAVIATE_GRPC_PORT,
+        # )
+        client = weaviate.connect_to_custom(
+        http_host=WEAVIATE_HOST,
+        http_port=WEAVIATE_PORT,
+        http_secure=False,
+        grpc_host=WEAVIATE_GRPC_HOST,
         grpc_port=WEAVIATE_GRPC_PORT,
+        grpc_secure=False,
+        skip_init_checks=True
     )
-except Exception as e:
-    logger.error(f"Failed to connect to Weaviate: {e}")
-    raise
+        return client
+    except Exception as e:
+        logger.error(f"Failed to create Weaviate client: {e}")
+        raise
 
-def ensure_collection(name: str):
+
+def ensure_collection(client, name: str):
     """
     Ensure a collection exists in Weaviate; create if missing.
     """
@@ -53,7 +73,7 @@ def ensure_collection(name: str):
         logger.error(f"Failed to ensure collection '{name}': {e}")
         raise
 
-def store_summary(record: dict) -> str:
+def store_summary(client, record: dict) -> str:
     """
     Store a summarized article (title + summary) in Weaviate.
     Automatically creates the collection if it doesn't exist.
@@ -66,7 +86,7 @@ def store_summary(record: dict) -> str:
             logger.warning(f"Skipping record '{title}' — empty summary.")
             return ""
 
-        collection = ensure_collection(WEAVIATE_COLLECTION)
+        collection = ensure_collection(client, WEAVIATE_COLLECTION)
 
         uuid = collection.data.insert(properties={"title": title, "summary": summary})
         logger.info(f"Stored summary for '{title}' (UUID: {uuid}) in '{WEAVIATE_COLLECTION}'.")
@@ -75,12 +95,12 @@ def store_summary(record: dict) -> str:
         logger.error(f"Failed to store summary for '{record.get('title', 'Unknown')}': {e}")
         raise
 
-def fetch_summary(object_id: str):
+def fetch_summary(client,object_id: str):
     """
     Fetch and print stored article summary by object ID.
     """
     try:
-        collection = ensure_collection(WEAVIATE_COLLECTION)
+        collection = ensure_collection(client,WEAVIATE_COLLECTION)
         obj = collection.query.fetch_object_by_id(object_id, include_vector=False)
         if obj:
             logger.info(f"Fetched from '{WEAVIATE_COLLECTION}': {obj.properties}")
@@ -93,12 +113,12 @@ def fetch_summary(object_id: str):
         raise
 
 
-def delete_collection():
+def delete_collection(client):
     """
     Delete the configured collection from Weaviate.
     """
     try:
-        client.collections.delete(WEAVIATE_COLLECTION)
+        client.collections.delete(client,WEAVIATE_COLLECTION)
         logger.info(f"Deleted collection '{WEAVIATE_COLLECTION}'.")
     except Exception as e:
         logger.error(f"Failed to delete collection '{WEAVIATE_COLLECTION}': {e}")
@@ -107,18 +127,19 @@ def delete_collection():
 if __name__ == "__main__":
     try:
         # Step 1: Auto-create collection
-        ensure_collection(WEAVIATE_COLLECTION)
+        client = get_weaviate_client()
+        ensure_collection(client, WEAVIATE_COLLECTION)
 
         # Step 2: Insert a sample record
         sample = {
             "title": "AI and the Future of Work",
             "summary": "Artificial Intelligence is transforming the workforce by automating repetitive tasks."
         }
-        obj_id = store_summary(sample)
+        obj_id = store_summary(client,sample)
 
         # Step 3: Fetch to verify
         if obj_id:
-            fetched = fetch_summary(obj_id)
+            fetched = fetch_summary(client,obj_id)
             print("\nRetrieved from Weaviate:", fetched)
 
         # Step 4: Optional cleanup
