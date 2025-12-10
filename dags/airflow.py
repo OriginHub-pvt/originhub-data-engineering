@@ -1,4 +1,6 @@
-from datetime import datetime, timedelta
+"""RSS ingestion and summarization DAGs following the requested format."""
+import datetime
+
 from airflow import DAG
 from airflow.providers.standard.operators.python import PythonOperator
 
@@ -14,57 +16,67 @@ default_args = {
     "owner": "OriginHub",
     "depends_on_past": False,
     "retries": 0,
-    "retry_delay": timedelta(minutes=5),
+    "retry_delay": datetime.timedelta(minutes=5),
 }
 
-with DAG(
-    dag_id="rss_feed_ingestion_and_normalization",
-    description="Fetch RSS feeds, store raw XML to GCS, normalize to JSON, filter relevant items, and scrapes content from the relevant items.",
+rss_ingestion_dag = DAG(
+    "rss_feed_ingestion_and_normalization",
+    description=(
+        "Fetch RSS feeds, store raw XML to GCS, normalize to JSON, filter relevant items, "
+        "and scrape content from the relevant items."
+    ),
     default_args=default_args,
-    start_date=datetime(2024, 1, 1),
+    start_date=datetime.datetime(2024, 1, 1),
     catchup=False,
     tags=["rss", "ingestion", "normalization", "filtering", "scraping"],
     params={
         "rss_url": "",
         "request_timeout": 30,
     },
-) as dag:
-    fetch_rss_task = PythonOperator(
-        task_id="fetch_rss_feeds",
-        python_callable=fetch_rss_feeds,
-    )
+)
 
-    store_rss_task = PythonOperator(
-        task_id="store_rss_feeds",
-        python_callable=store_rss_feeds,
-        op_kwargs={"payload": fetch_rss_task.output},
-    )
+fetch_rss_task = PythonOperator(
+    task_id="fetch_rss_feeds",
+    python_callable=fetch_rss_feeds,
+    dag=rss_ingestion_dag,
+)
 
-    normalize_feeds_task = PythonOperator(
-        task_id="normalize_feeds",
-        python_callable=normalize_feeds_to_gcs,
-        op_kwargs={"payload": fetch_rss_task.output},
-    )
+store_rss_task = PythonOperator(
+    task_id="store_rss_feeds",
+    python_callable=store_rss_feeds,
+    op_kwargs={"payload": fetch_rss_task.output},
+    dag=rss_ingestion_dag,
+)
 
-    filter_articles_task = PythonOperator(
-        task_id="filter_articles",
-        python_callable=filter_articles,
-        op_kwargs={"payload": normalize_feeds_task.output},
-    )
+normalize_feeds_task = PythonOperator(
+    task_id="normalize_feeds",
+    python_callable=normalize_feeds_to_gcs,
+    op_kwargs={"payload": fetch_rss_task.output},
+    dag=rss_ingestion_dag,
+)
 
-    scrape_content_task = PythonOperator(
-        task_id="scrape_web_content",
-        python_callable=scrape_all_from_json_files,
-        op_kwargs={"payload": filter_articles_task.output},
-    )
+filter_articles_task = PythonOperator(
+    task_id="filter_articles",
+    python_callable=filter_articles,
+    op_kwargs={"payload": normalize_feeds_task.output},
+    dag=rss_ingestion_dag,
+)
 
-    fetch_rss_task >> [store_rss_task, normalize_feeds_task]
-    normalize_feeds_task >> filter_articles_task
-    filter_articles_task >> scrape_content_task
+scrape_content_task = PythonOperator(
+    task_id="scrape_web_content",
+    python_callable=scrape_all_from_json_files,
+    op_kwargs={"payload": filter_articles_task.output},
+    dag=rss_ingestion_dag,
+)
 
-with DAG(
-    dag_id="summarize_and_store_weaviate",
-    start_date=datetime(2024, 1, 1),
+fetch_rss_task >> [store_rss_task, normalize_feeds_task]
+normalize_feeds_task >> filter_articles_task
+filter_articles_task >> scrape_content_task
+
+
+summarize_dag = DAG(
+    "summarize_and_store_weaviate",
+    start_date=datetime.datetime(2024, 1, 1),
     max_active_runs=1,
     schedule=None,
     params={
@@ -74,33 +86,32 @@ with DAG(
             "scraped_at": "2025-10-30T16:40:00Z",
             "word_count": 1234,
             "url": "https://example.com/article",
-            "title": "AI is Transforming the World"
+            "title": "AI is Transforming the World",
         }
     },
-) as dag:
+)
 
-    summarize_task = PythonOperator(
-        task_id="summarize_record",
-        python_callable=summarize_record,
-        op_kwargs={
-            "record": {
-                "scraped_content": "{{ params.scraped_data.scraped_content }}",
-                "scraped_metadata": "{{ params.scraped_data.scraped_metadata }}",
-                "scraped_at": "{{ params.scraped_data.scraped_at }}",
-                "word_count": "{{ params.scraped_data.word_count }}",
-                "url": "{{ params.scraped_data.url }}",
-                "title": "{{ params.scraped_data.title }}"
-            }
-        },
-    )
+summarize_task = PythonOperator(
+    task_id="summarize_record",
+    python_callable=summarize_record,
+    op_kwargs={
+        "record": {
+            "scraped_content": "{{ params.scraped_data.scraped_content }}",
+            "scraped_metadata": "{{ params.scraped_data.scraped_metadata }}",
+            "scraped_at": "{{ params.scraped_data.scraped_at }}",
+            "word_count": "{{ params.scraped_data.word_count }}",
+            "url": "{{ params.scraped_data.url }}",
+            "title": "{{ params.scraped_data.title }}",
+        }
+    },
+    dag=summarize_dag,
+)
 
-    store_task = PythonOperator(
-        task_id="store_in_weaviate",
-        python_callable=store_summary,
-        op_kwargs={"record": summarize_task.output},
-    )
+store_task = PythonOperator(
+    task_id="store_in_weaviate",
+    python_callable=store_summary,
+    op_kwargs={"record": summarize_task.output},
+    dag=summarize_dag,
+)
 
-    summarize_task >> store_task
-
-if __name__ == "__main__":
-    dag.test()
+summarize_task >> store_task
