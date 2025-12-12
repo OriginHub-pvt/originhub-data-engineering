@@ -17,12 +17,15 @@ MODEL_NAME = os.getenv("SUMMARIZATION_MODEL", "sshleifer/distilbart-cnn-12-6")
 _summarizer: Pipeline | None = None
 
 
-def summarize_record(record: Dict[str, Any]) -> Dict[str, Any]:
+def summarize_record(record: Dict[str, Any] | None = None, **kwargs: Any) -> Dict[str, Any]:
     """
     Summarize the 'scraped_content' field in a JSON record.
     Returns a dict with title, summary, and error info (if any).
     """
     global _summarizer
+    if record is None:
+        # Allow mapped tasks to pass the record via op_kwargs or directly as kwargs
+        record = kwargs if kwargs else {}
 
     try:
         if not isinstance(record, dict):
@@ -33,7 +36,7 @@ def summarize_record(record: Dict[str, Any]) -> Dict[str, Any]:
         desc = record.get("scraped_content", "")
 
         if not desc or not isinstance(desc, str) or not desc.strip():
-            logging.warning(f"Skipping record '{title}' — empty or invalid content.")
+            logging.warning(f"Skipping record '{title}' â€” empty or invalid content.")
             return {"title": title, "summary": "", "error": "Empty or invalid content"}
 
         if _summarizer is None:
@@ -68,24 +71,28 @@ def summarize_record(record: Dict[str, Any]) -> Dict[str, Any]:
 
         final_summary = " ".join(summaries).strip()
         logging.info(
-            f"Completed summary for '{title}' — summary length={len(final_summary)} chars"
+            f"Completed summary for '{title}' â€” summary length={len(final_summary)} chars"
         )
 
         return {
-            "title": title,
-            "summary": final_summary,
-            "url": record.get("url", ""),
-            "scraped_at": record.get("scraped_at", ""),
-            "word_count": record.get("word_count", 0),
-            "metadata": record.get("scraped_metadata", {}),
-            "error": None
+            "record": {
+                "title": title,
+                "summary": final_summary,
+                "url": record.get("url", ""),
+                "scraped_at": record.get("scraped_at", ""),
+                "word_count": record.get("word_count", 0),
+                "metadata": record.get("scraped_metadata", {}),
+                "error": None
+            }
         }
 
     except Exception as e:
         tb = traceback.format_exc()
         logging.critical(f"Unexpected failure while summarizing record: {e}\n{tb}")
         return {
-            "title": record.get("title", "Unknown") if isinstance(record, dict) else "Unknown",
-            "summary": "",
-            "error": f"Unexpected error: {str(e)}"
+            "record": {
+                "title": record.get("title", "Unknown") if isinstance(record, dict) else "Unknown",
+                "summary": "",
+                "error": f"Unexpected error: {str(e)}"
+            }
         }

@@ -8,7 +8,7 @@ import json
 import logging
 import os
 from typing import Any, Dict, List, Optional
-from datetime import datetime, UTC, timezone
+from datetime import datetime, UTC
 
 import requests
 import re
@@ -307,16 +307,17 @@ def scrape_web_content(**context: Any) -> Dict[str, Any]:
 
 def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
     """
-    Scrape all URLs from filtered JSON feed items and automatically trigger summarization DAGs
-    using the Airflow REST API (works for Airflow 3.x hosted on localhost:8080).
+    Scrape all URLs from filtered JSON feed items and return records for downstream
+    summarization within the same DAG.
 
     Args:
         context: Airflow task context, containing XCom or upstream task outputs
 
     Returns:
-        Dictionary containing basic summary metrics (triggered and failed counts)
+        Dictionary with scraped records and simple metrics for logging
     """
     scraper = WebScraper()
+    ti = context.get("ti")
 
     # Retrieve feed items from upstream task (filter_articles)
     feed_items = context.get("payload") or context["ti"].xcom_pull(task_ids="filter_articles")
@@ -324,8 +325,8 @@ def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
 
     logging.info(f"Found {total_feeds} feeds to scrape and summarize.")
 
-    triggered = 0
     failed = 0
+    records: list[Dict[str, Any]] = []
 
     for idx, item in enumerate(feed_items or [], 1):
         url = item.get("url")
@@ -351,7 +352,7 @@ def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
                 "word_count": scraped_data.get("word_count", 0),
             }
         except Exception as e:
-            logging.error(f"✗ Failed to scrape or trigger for {url}: {e}")
+            logging.error(f"âœ— Failed to scrape or trigger for {url}: {e}")
             failed += 1
             result = {
                 "url": url,
@@ -361,30 +362,19 @@ def scrape_all_from_json_files(**context: Any) -> Dict[str, Any]:
                 "scraped_at": "",
                 "word_count": 0
             }
-        finally:
-            logging.info("Finally block reached.")
-            # --- Step 3: Trigger summarization DAG via REST API ---
-            token = generate_JWT()
-            logical_date = datetime.now(timezone.utc).isoformat()
-            result = sanitize_payload(result)
-            response = requests.post(
-                api_endpoint,
-                json={
-                    "logical_date": logical_date,
-                    "conf": {"scraped_data": result}
-                },
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {token}"
-                },
-            )
-            response.raise_for_status()
+        records.append({"record": result})
 
-            logging.info(f"Triggered {dag_id} for '{title}' successfully")
-            triggered += 1
-
-    logging.info(f"Completed scraping: {triggered} triggered, {failed} failed.")
-    return {"triggered": triggered, "failed": failed}
+    logging.info(
+        "Completed scraping â€” %s records ready, %s failed.",
+        len(records),
+        failed,
+    )
+    if ti:
+        ti.xcom_push(
+            key="scrape_metrics",
+            value={"failed": failed, "total": total_feeds, "returned": len(records)},
+        )
+    return sanitize_payload(records)
 
 def generate_JWT():
     """
